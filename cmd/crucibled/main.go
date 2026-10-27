@@ -5,8 +5,39 @@
 // Package main provides the entrypoint for the crucibled server daemon.
 package main
 
-import "fmt"
+import (
+	"context"
+	"fmt"
+	"os"
+
+	"github.com/spf13/cobra"
+	"gotcode.org/crucible/internal/ui"
+)
+
+func newRootCmd() *cobra.Command {
+	rootCmd := &cobra.Command{
+		Use:           "crucibled",
+		Short:         "Crucible Automation Server Daemon",
+		Long:          "Crucible is a sovereign, lightweight automation orchestrator for Ansible playbooks and systems tasks.",
+		SilenceErrors: true,
+		SilenceUsage:  true,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return cmd.Help()
+		},
+	}
+
+	rootCmd.SetHelpFunc(ui.HandleHelp)
+	rootCmd.SetUsageFunc(ui.HandleUsage)
+
+	rootCmd.AddCommand(versionCmd())
+
+	return rootCmd
+}
 
 func main() {
-	fmt.Println("Crucible Server Daemon (crucibled) - initial scaffolding")
+	cmd := newRootCmd()
+	if err := cmd.ExecuteContext(context.Background()); err != nil {
+		fmt.Fprintln(os.Stderr, ui.ErrorMsg("%s", err))
+		os.Exit(1)
+	}
 }

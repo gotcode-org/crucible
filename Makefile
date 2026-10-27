@@ -7,11 +7,13 @@ SHELL := /usr/bin/env bash
 # Build metadata
 GIT_VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "v0.1.0-dev")
 GIT_COMMIT  ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+GIT_BRANCH  ?= $(shell git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "main")
 BUILD_DATE  ?= $(shell date -u +"%Y-%m-%dT%H:%M:%SZ")
 
 LDFLAGS := -s -w \
 	-X "gotcode.org/crucible/internal/version.gitVersion=$(GIT_VERSION)" \
 	-X "gotcode.org/crucible/internal/version.gitCommit=$(GIT_COMMIT)" \
+	-X "gotcode.org/crucible/internal/version.gitBranch=$(GIT_BRANCH)" \
 	-X "gotcode.org/crucible/internal/version.buildDate=$(BUILD_DATE)"
 
 .PHONY: all build check lint sec vuln test clean tidy

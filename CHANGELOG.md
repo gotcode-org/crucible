@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Subsystems**:
+  - Hexagonal CQRS Version Subsystem ([`internal/version/`](./internal/version/)) providing runtime build metadata extraction, dependency introspection, and tabular/JSON presentation formats.
+  - Terminal UI Subsystem ([`internal/ui/`](./internal/ui/)) with Charm Lip Gloss styling, adaptive colors, status badges, ASCII banner, formatted tables, and Cobra help/usage formatters.
+- **Commands**:
+  - Added `version` subcommand to `crucibled` daemon ([`cmd/crucibled/version.go`](./cmd/crucibled/version.go)) and `cruciblectl` CLI ([`cmd/cruciblectl/version.go`](./cmd/cruciblectl/version.go)) with optional dependency tree flag (`-d`, `--dependencies`).
 - **Repository Architecture & Governance**:
   - Technical blueprint specifications ([`PLAN.md`](./PLAN.md), [`ARCHITECTURE.md`](./ARCHITECTURE.md)).
   - Contributor and AI agent guidelines with strict commit and signing guardrails ([`AGENTS.md`](./AGENTS.md), [`CONTRIBUTING.md`](./CONTRIBUTING.md)).

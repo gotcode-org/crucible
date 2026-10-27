@@ -21,8 +21,8 @@ Format: [state] (Priority) [domain/binary] Task description @assignee +tag
 [x] (B) [shared] Configure make check pre-commit verification target (tidy lint sec vuln test) @jovens@gotcode.org +phase1 +tooling
 [x] (B) [shared] Add root-anchored .gitignore ignoring binaries, SQLite db/WAL files, logs, FIFOs, and reports @jovens@gotcode.org +phase1 +tooling
 [x] (C) [shared] Configure .golangci.yml for project linting standards @jovens@gotcode.org +phase1 +tooling
-[ ] (B) [shared] Implement version command and metadata reporter (AppName, AppVersion, GitBranch, GitCommit, Architecture, Go version, Dependencies) with Makefile ldflags injection @jovens@gotcode.org +phase1 +tooling
-[ ] (B) [shared] Author Lip Gloss terminal styles, ASCII banner, formatted tables, and status badges in internal/ui @jovens@gotcode.org +phase1 +tooling +cli
+[x] (B) [shared] Implement version command and metadata reporter (AppName, AppVersion, GitBranch, GitCommit, Architecture, Go version, Dependencies) with Makefile ldflags injection @jovens@gotcode.org +phase1 +tooling
+[x] (B) [shared] Author Lip Gloss terminal styles, ASCII banner, formatted tables, and status badges in internal/ui @jovens@gotcode.org +phase1 +tooling +cli
 [ ] (A) [storage] Author external raw SQL migration 001_initial.sql with monotonic ULIDs @jovens@gotcode.org +phase1 +storage
 [ ] (A) [storage] Author external raw SQL index migration 002_indexes.sql @jovens@gotcode.org +phase1 +storage
 [ ] (B) [notify] Define Notification models and 3-tier recipient resolver interfaces @jovens@gotcode.org +phase1 +notify
