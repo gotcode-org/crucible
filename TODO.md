@@ -1,0 +1,230 @@
+# Crucible (`crucibled` / `cruciblectl`) — Master Implementation Checklist
+
+Format: `[state] (Priority) [domain/binary] Task description @assignee +tag`
+
+| Element        | Description                                                |
+|----------------|------------------------------------------------------------|
+| [ ], [-], [x]  | Task State: [ ] = Open, [-] = In-Progress, [x] = Completed.|
+| (A), (B), (C)  | Task Priority (A = High, B = Medium, C = Low). Optional.   |
+| [crucibled]    | Target binary (crucibled, cruciblectl, shared).            |
+| [domain]       | Target domain (storage, secrets, reports, cluster, etc).   |
+| @name          | Context / Assignee (e.g., @jovens@gotcode.org).            |
+| +tag           | Project or state tag (e.g., +phase1, +security).           |
+===============================================================================
+
+## Phase 1: Project Scaffolding, Schemas & Models
+- [x] (A) [shared] Initialize go.mod module gotcode.org/crucible Go 1.24+
+      @jovens@gotcode.org +phase1 +scaffolding
+- [ ] (A) [shared] Establish flat package-by-feature directory layout under
+      internal/ @jovens@gotcode.org +phase1 +architecture
+- [x] (A) [shared] Author base Makefile enforcing pre-build pipeline all: tidy
+      lint sec vuln test build @jovens@gotcode.org +phase1 +tooling
+- [x] (A) [shared] Configure make tidy target (go mod tidy && go mod download)
+      @jovens@gotcode.org +phase1 +tooling
+- [x] (A) [shared] Configure make lint target (golangci-lint with empty-repo
+      safety guard) @jovens@gotcode.org +phase1 +tooling +lint
+- [x] (A) [shared] Configure make sec target (gosec@v2.22.2 AST scanner pinned
+      for Go 1.24 with empty-repo guard) @jovens@gotcode.org +phase1 +tooling
+      +security
+- [x] (A) [shared] Configure make vuln target (govulncheck@v1.1.4 vulnerability
+      check pinned for Go 1.24 with empty-repo guard) @jovens@gotcode.org
+      +phase1 +tooling +security
+- [x] (B) [shared] Configure make check pre-commit verification target (tidy
+      lint sec vuln test) @jovens@gotcode.org +phase1 +tooling
+- [x] (B) [shared] Add root-anchored .gitignore ignoring binaries, SQLite
+      db/WAL files, logs, FIFOs, and reports @jovens@gotcode.org +phase1
+      +tooling
+- [x] (C) [shared] Configure .golangci.yml for project linting standards
+      @jovens@gotcode.org +phase1 +tooling
+- [x] (B) [shared] Implement version command and metadata reporter (AppName,
+      AppVersion, GitBranch, GitCommit, Architecture, Go version, Dependencies)
+      with Makefile ldflags injection @jovens@gotcode.org +phase1 +tooling
+- [x] (B) [shared] Author Lip Gloss terminal styles, ASCII banner, formatted
+      tables, and status badges in internal/ui @jovens@gotcode.org +phase1
+      +tooling +cli
+- [ ] (A) [storage] Author external raw SQL migration 001_initial.sql with
+      monotonic ULIDs @jovens@gotcode.org +phase1 +storage
+- [ ] (A) [storage] Author external raw SQL index migration 002_indexes.sql
+      @jovens@gotcode.org +phase1 +storage
+- [ ] (B) [notify] Define Notification models and 3-tier recipient resolver
+      interfaces @jovens@gotcode.org +phase1 +notify
+- [ ] (A) [secrets] Define Ansible Vault secrets engine models and unseal state
+      types @jovens@gotcode.org +phase1 +secrets +security
+- [ ] (A) [reports] Define report generation models, ULID sharding, and log
+      chunk types @jovens@gotcode.org +phase1 +reports
+- [ ] (A) [cluster] Define worker pool, lease state machine, and node models
+      @jovens@gotcode.org +phase1 +cluster
+- [ ] (A) [engine] Define subprocess runner, Python venv, and task execution
+      pipeline models @jovens@gotcode.org +phase1 +engine
+- [ ] (B) [ansible] Define inventory, NetBox plugin, and hierarchical variable
+      resolver models @jovens@gotcode.org +phase1 +ansible
+- [ ] (B) [git] Define Git worktree sync, commit broadcaster, and lock models
+      @jovens@gotcode.org +phase1 +git
+- [ ] (B) [auth] Define PAM authentication, multi-device TOTP, and session
+      models @jovens@gotcode.org +phase1 +auth +security
+- [ ] (B) [tokens] Define Personal Access Token (PAT) models and permission
+      scopes @jovens@gotcode.org +phase1 +tokens +security
+- [ ] (C) [ssh] Define pure Go SSH keypair generator and host key models
+      @jovens@gotcode.org +phase1 +ssh
+- [ ] (C) [schedule] Define cron scheduler with second precision and timer
+      models @jovens@gotcode.org +phase1 +schedule
+- [ ] (C) [metrics] Define Prometheus telemetry recorder and cluster federation
+      models @jovens@gotcode.org +phase1 +metrics
+- [ ] (C) [events] Define in-memory pub/sub event bus and lifecycle event types
+      @jovens@gotcode.org +phase1 +events
+- [ ] (A) [logging] Implement operational logging with pure Go log/slog
+      streaming to stdout/stderr @jovens@gotcode.org +phase1 +logging
+- [ ] (A) [audit] Author raw SQL schema 003_audit_ledger.sql with monotonic
+      ULIDs, SHA-256 hash chaining, and SQLite anti-tamper triggers
+      @jovens@gotcode.org +phase1 +audit +storage
+- [ ] (A) [audit] Define AuditEvent domain models, hash calculation
+      specification, and event recorder ports @jovens@gotcode.org +phase1
+      +audit +security
+
+## Phase 2: Engine Subsystems & Pure Go Implementations
+- [ ] (A) [reports] Implement zero-RAM append-only disk log streaming in
+      var/reports/{shard}/ @jovens@gotcode.org +phase2 +reports
+- [ ] (A) [reports] Implement live log fan-out hub with bounded channels
+      (capacity 256) @jovens@gotcode.org +phase2 +reports
+- [ ] (A) [reports] Implement catch-up disk reader for late-joining log stream
+      viewers @jovens@gotcode.org +phase2 +reports
+- [ ] (A) [secrets] Implement AES-256-GCM + Argon2id envelope encryption at
+      rest @jovens@gotcode.org +phase2 +secrets +security
+- [ ] (A) [secrets] Implement seal and unseal state machine with passphrase and
+      Shamir shares @jovens@gotcode.org +phase2 +secrets +security
+- [ ] (A) [secrets] Implement ephemeral tmpfs POSIX FIFO injection unlinked on
+      open @jovens@gotcode.org +phase2 +secrets +security
+- [ ] (B) [notify] Implement 3-tier recipient hierarchy resolver for email
+      dispatch @jovens@gotcode.org +phase2 +notify
+- [ ] (B) [notify] Build bulletproof Outlook MSO table notification templates
+      @jovens@gotcode.org +phase2 +notify
+- [ ] (B) [notify] Implement pure Go SMTP client with STARTTLS support
+      @jovens@gotcode.org +phase2 +notify
+- [ ] (B) [notify] Implement HMAC-SHA256 signed report view token generator
+      @jovens@gotcode.org +phase2 +notify +security
+- [ ] (B) [auth] Implement Linux PAM authentication adapter for system accounts
+      @jovens@gotcode.org +phase2 +auth +security
+- [ ] (B) [auth] Implement multi-device RFC 6238 TOTP 2FA engine with encrypted
+      keys @jovens@gotcode.org +phase2 +auth +security
+- [ ] (B) [auth] Implement secure shared account onboarding invite URL
+      generator @jovens@gotcode.org +phase2 +auth +security
+- [ ] (B) [tokens] Implement SHA-256 hashed Personal Access Tokens (PATs) and
+      scope validator @jovens@gotcode.org +phase2 +tokens +security
+- [ ] (A) [storage] Implement modernc.org/sqlite pure Go WAL storage layer
+      (zero Cgo) @jovens@gotcode.org +phase2 +storage
+- [ ] (A) [storage] Implement embedded go:embed SQL schema migration runner
+      @jovens@gotcode.org +phase2 +storage
+- [ ] (A) [storage] Implement monotonic ULID generator and foreign key enforcer
+      @jovens@gotcode.org +phase2 +storage
+- [ ] (A) [audit] Implement append-only cryptographic hash chain recorder
+      (genesis block & previous_hash linking) in SQLite @jovens@gotcode.org
+      +phase2 +audit +security
+- [ ] (A) [audit] Implement cruciblectl audit verify cryptographic chain
+      validation command @jovens@gotcode.org +phase2 +audit +cli
+- [ ] (B) [audit] Implement cruciblectl audit list and export filters (actor,
+      resource, action, date range) @jovens@gotcode.org +phase2 +audit +cli
+
+## Phase 3: Cluster Federation, NetBox & Execution Pipeline
+- [ ] (A) [cluster] Author proto/crucible/cluster.proto with gRPC service
+      definitions @jovens@gotcode.org +phase3 +cluster +proto
+- [ ] (A) [cluster] Implement mTLS cluster transport and TLS cert handshake
+      validator @jovens@gotcode.org +phase3 +cluster +security
+- [ ] (A) [cluster] Implement worker availability state machine (active, drain,
+      paused) @jovens@gotcode.org +phase3 +cluster
+- [ ] (B) [cluster] Implement Linux /proc/stat and /proc/meminfo telemetry
+      sampler @jovens@gotcode.org +phase3 +cluster
+- [ ] (A) [cluster] Implement 10-second heartbeat watchdog marking dead nodes
+      DOWN @jovens@gotcode.org +phase3 +cluster
+- [ ] (A) [cluster] Implement split-brain failsafe freezing triggers in
+      ISOLATED state @jovens@gotcode.org +phase3 +cluster
+- [ ] (B) [ansible] Implement YAML and INI inventory parser with group/host
+      hierarchies @jovens@gotcode.org +phase3 +ansible
+- [ ] (B) [ansible] Implement NetBox dynamic inventory plugin and JSON cache
+      @jovens@gotcode.org +phase3 +ansible
+- [ ] (A) [engine] Implement subprocess execution runner capturing
+      stdout/stderr @jovens@gotcode.org +phase3 +engine
+- [ ] (B) [engine] Implement isolated Python venv manager and dependency
+      installer @jovens@gotcode.org +phase3 +engine
+- [ ] (A) [engine] Implement remote worker dispatch engine over streaming gRPC
+      @jovens@gotcode.org +phase3 +engine +cluster
+- [ ] (B) [git] Implement upstream Git synchronizer with 5-minute fallback
+      polling @jovens@gotcode.org +phase3 +git
+- [ ] (A) [git] Implement sub-500ms P2P commit broadcaster over gRPC
+      BroadcastCommit @jovens@gotcode.org +phase3 +git +cluster
+- [ ] (C) [schedule] Implement cron scheduler with second precision and
+      one-time timers @jovens@gotcode.org +phase3 +schedule
+
+## Phase 4: Server Daemon & Web Experience
+- [ ] (A) [crucibled] Implement cmd/crucibled entrypoint with Cobra flags and
+      viper config @jovens@gotcode.org +phase4 +crucibled
+- [ ] (A) [crucibled] Implement cmux port multiplexer for HTTP/1.1 and gRPC on
+      single port @jovens@gotcode.org +phase4 +crucibled
+- [ ] (B) [crucibled] Implement local UNIX domain socket listener
+      /run/crucibled/crucible.sock @jovens@gotcode.org +phase4 +crucibled
+- [ ] (B) [crucibled] Implement graceful shutdown handler with SIGTERM/SIGINT
+      drains @jovens@gotcode.org +phase4 +crucibled
+- [ ] (B) [web] Embed web/templates/ and web/static/ assets via Go go:embed
+      @jovens@gotcode.org +phase4 +web
+- [ ] (B) [web] Implement base layout and navigation bar @jovens@gotcode.org
+      +phase4 +web
+- [ ] (B) [web] Implement live dashboard displaying active, completed, and
+      queued runs @jovens@gotcode.org +phase4 +web
+- [ ] (A) [web] Implement real-time log viewer streaming SSE/WS from disk
+      broadcaster @jovens@gotcode.org +phase4 +web
+- [ ] (B) [web] Implement standalone HTML report hosting endpoint
+      @jovens@gotcode.org +phase4 +web
+- [ ] (A) [web] Enforce anti-enumeration 404 Not Found for anonymous access to
+      private runs @jovens@gotcode.org +phase4 +web +security
+- [ ] (B) [web] Implement operator Web UI for secrets vault unseal and key
+      entry @jovens@gotcode.org +phase4 +web +secrets
+- [ ] (B) [web] Implement worker node fleet overview with telemetry sparklines
+      @jovens@gotcode.org +phase4 +web +cluster
+- [ ] (B) [web] Implement administrative /audit web view with timeline filters,
+      actor inspection, and cryptographic verification badge
+      @jovens@gotcode.org +phase4 +web +audit
+- [ ] (C) [web] Implement dark mode toggle with persistent local preference
+      @jovens@gotcode.org +phase4 +web
+
+## Phase 5: Operator CLI (cruciblectl)
+- [ ] (A) [cruciblectl] Implement cmd/cruciblectl entrypoint with Cobra
+      commands and Lip Gloss terminal styling @jovens@gotcode.org +phase5
+      +cruciblectl +cli
+- [ ] (B) [cruciblectl] Author Lip Gloss terminal styles, tables, and status
+      badges for CLI output @jovens@gotcode.org +phase5 +cruciblectl +cli
+- [ ] (B) [cruciblectl] Implement dual-mode client adapter (UNIX socket and
+      HTTPS + PAT) @jovens@gotcode.org +phase5 +cruciblectl
+- [ ] (B) [cruciblectl] Implement cruciblectl run trigger, list, and status
+      commands @jovens@gotcode.org +phase5 +cruciblectl
+- [ ] (A) [cruciblectl] Implement cruciblectl logs --follow real-time streaming
+      over gRPC @jovens@gotcode.org +phase5 +cruciblectl
+- [ ] (B) [cruciblectl] Implement cruciblectl vault status, init, and unseal
+      commands @jovens@gotcode.org +phase5 +cruciblectl +secrets
+- [ ] (B) [cruciblectl] Implement cruciblectl worker list, drain, and pause
+      commands @jovens@gotcode.org +phase5 +cruciblectl +cluster
+- [ ] (A) [cruciblectl] Implement cruciblectl audit list, show, verify, and
+      export commands @jovens@gotcode.org +phase5 +cruciblectl +cli +audit
+- [ ] (C) [cruciblectl] Implement cruciblectl token create, list, and revoke
+      commands @jovens@gotcode.org +phase5 +cruciblectl +tokens
+
+## Phase 6: System Integration, Packaging & Daemons
+- [ ] (B) [shared] Author systemd/crucibled.service and
+      systemd/crucible-worker.service @jovens@gotcode.org +phase6 +systemd
+- [ ] (C) [tls] Implement native ACME Let's Encrypt TLS-ALPN-01 and DNS-01
+      engine @jovens@gotcode.org +phase6 +tls
+- [ ] (C) [metrics] Implement Prometheus /metrics scraping endpoint and
+      collector @jovens@gotcode.org +phase6 +metrics
+
+## Phase 7: Verification, Load Testing & Documentation
+- [ ] (A) [shared] Author table-driven unit tests for all internal feature
+      packages @jovens@gotcode.org +phase7 +tests
+- [ ] (A) [shared] Verify zero-Cgo static builds (CGO_ENABLED=0 go build)
+      @jovens@gotcode.org +phase7 +build
+- [ ] (B) [reports] Benchmark zero-RAM disk log streaming under 100k log line
+      burst @jovens@gotcode.org +phase7 +reports
+- [ ] (B) [cluster] Test worker drain and split-brain ISOLATED quorum failover
+      @jovens@gotcode.org +phase7 +cluster
+- [ ] (B) [secrets] Verify POSIX tmpfs FIFO unlinking and zero plaintext disk
+      leakage @jovens@gotcode.org +phase7 +secrets +security
+- [ ] (A) [audit] Test cryptographic audit chain tamper detection (simulate
+      unauthorized row update or deletion) @jovens@gotcode.org +phase7 +audit
+      +security
