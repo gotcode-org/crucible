@@ -1,0 +1,25 @@
+# Binaries built by make
+/crucibled
+/cruciblectl
+/bin/
+/dist/
+
+# Test artifacts
+*.test
+*.out
+cover.out
+coverage.html
+
+# Local data & logs
+/var/
+/run/
+*.log
+
+# Environment & editor
+.env
+.env.*
+!.env.example
+.idea/
+.vscode/
+*.swp
+*~

@@ -1,0 +1,68 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (c) 2026 The GotCode Collective
+# See the LICENSE file in the project root for full license details.
+
+run:
+  timeout: 5m
+  tests: true
+  allow-parallel-runners: true
+
+output:
+  formats:
+    - format: colored-line-number
+  print-issued-lines: true
+  print-linter-name: true
+
+linters-settings:
+  gocyclo:
+    min-complexity: 15
+  govet:
+    enable-all: true
+    disable:
+      - fieldalignment
+  revive:
+    rules:
+      - name: exported
+        arguments:
+          - checkPrivateReceivers
+      - name: var-naming
+      - name: package-comments
+      - name: indent-error-flow
+      - name: errorf
+      - name: blank-imports
+      - name: context-as-argument
+      - name: error-return
+      - name: error-strings
+      - name: error-naming
+      - name: if-return
+      - name: increment-decrement
+      - name: receiver-naming
+      - name: time-naming
+      - name: unexported-return
+      - name: unreachable-code
+  misspell:
+    locale: US
+  errcheck:
+    check-type-assertions: true
+    check-blank: true
+
+linters:
+  disable-all: true
+  enable:
+    - errcheck
+    - gosimple
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+    - revive
+    - gofmt
+    - goimports
+    - misspell
+    - unconvert
+    - gocyclo
+
+issues:
+  exclude-use-default: false
+  max-issues-per-linter: 0
+  max-same-issues: 0
