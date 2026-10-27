@@ -38,6 +38,9 @@ Format: [state] (Priority) [domain/binary] Task description @assignee +tag
 [ ] (C) [schedule] Define cron scheduler with second precision and timer models @jovens@gotcode.org +phase1 +schedule
 [ ] (C) [metrics] Define Prometheus telemetry recorder and cluster federation models @jovens@gotcode.org +phase1 +metrics
 [ ] (C) [events] Define in-memory pub/sub event bus and lifecycle event types @jovens@gotcode.org +phase1 +events
+[ ] (A) [logging] Implement operational logging with pure Go log/slog streaming to stdout/stderr @jovens@gotcode.org +phase1 +logging
+[ ] (A) [audit] Author raw SQL schema 003_audit_ledger.sql with monotonic ULIDs, SHA-256 hash chaining, and SQLite anti-tamper triggers @jovens@gotcode.org +phase1 +audit +storage
+[ ] (A) [audit] Define AuditEvent domain models, hash calculation specification, and event recorder ports @jovens@gotcode.org +phase1 +audit +security
 
 # Phase 2: Engine Subsystems & Pure Go Implementations
 [ ] (A) [reports] Implement zero-RAM append-only disk log streaming in var/reports/{shard}/ @jovens@gotcode.org +phase2 +reports
@@ -57,6 +60,9 @@ Format: [state] (Priority) [domain/binary] Task description @assignee +tag
 [ ] (A) [storage] Implement modernc.org/sqlite pure Go WAL storage layer (zero Cgo) @jovens@gotcode.org +phase2 +storage
 [ ] (A) [storage] Implement embedded go:embed SQL schema migration runner @jovens@gotcode.org +phase2 +storage
 [ ] (A) [storage] Implement monotonic ULID generator and foreign key enforcer @jovens@gotcode.org +phase2 +storage
+[ ] (A) [audit] Implement append-only cryptographic hash chain recorder (genesis block & previous_hash linking) in SQLite @jovens@gotcode.org +phase2 +audit +security
+[ ] (A) [audit] Implement cruciblectl audit verify cryptographic chain validation command @jovens@gotcode.org +phase2 +audit +cli
+[ ] (B) [audit] Implement cruciblectl audit list and export filters (actor, resource, action, date range) @jovens@gotcode.org +phase2 +audit +cli
 
 # Phase 3: Cluster Federation, NetBox & Execution Pipeline
 [ ] (A) [cluster] Author proto/crucible/cluster.proto with gRPC service definitions @jovens@gotcode.org +phase3 +cluster +proto
@@ -87,6 +93,7 @@ Format: [state] (Priority) [domain/binary] Task description @assignee +tag
 [ ] (A) [web] Enforce anti-enumeration 404 Not Found for anonymous access to private runs @jovens@gotcode.org +phase4 +web +security
 [ ] (B) [web] Implement operator Web UI for secrets vault unseal and key entry @jovens@gotcode.org +phase4 +web +secrets
 [ ] (B) [web] Implement worker node fleet overview with telemetry sparklines @jovens@gotcode.org +phase4 +web +cluster
+[ ] (B) [web] Implement administrative /audit web view with timeline filters, actor inspection, and cryptographic verification badge @jovens@gotcode.org +phase4 +web +audit
 [ ] (C) [web] Implement dark mode toggle with persistent local preference @jovens@gotcode.org +phase4 +web
 
 # Phase 5: Operator CLI (cruciblectl)
@@ -97,6 +104,7 @@ Format: [state] (Priority) [domain/binary] Task description @assignee +tag
 [ ] (A) [cruciblectl] Implement cruciblectl logs --follow real-time streaming over gRPC @jovens@gotcode.org +phase5 +cruciblectl
 [ ] (B) [cruciblectl] Implement cruciblectl vault status, init, and unseal commands @jovens@gotcode.org +phase5 +cruciblectl +secrets
 [ ] (B) [cruciblectl] Implement cruciblectl worker list, drain, and pause commands @jovens@gotcode.org +phase5 +cruciblectl +cluster
+[ ] (A) [cruciblectl] Implement cruciblectl audit list, show, verify, and export commands @jovens@gotcode.org +phase5 +cruciblectl +cli +audit
 [ ] (C) [cruciblectl] Implement cruciblectl token create, list, and revoke commands @jovens@gotcode.org +phase5 +cruciblectl +tokens
 
 # Phase 6: System Integration, Packaging & Daemons
@@ -110,3 +118,4 @@ Format: [state] (Priority) [domain/binary] Task description @assignee +tag
 [ ] (B) [reports] Benchmark zero-RAM disk log streaming under 100k log line burst @jovens@gotcode.org +phase7 +reports
 [ ] (B) [cluster] Test worker drain and split-brain ISOLATED quorum failover @jovens@gotcode.org +phase7 +cluster
 [ ] (B) [secrets] Verify POSIX tmpfs FIFO unlinking and zero plaintext disk leakage @jovens@gotcode.org +phase7 +secrets +security
+[ ] (A) [audit] Test cryptographic audit chain tamper detection (simulate unauthorized row update or deletion) @jovens@gotcode.org +phase7 +audit +security

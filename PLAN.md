@@ -1544,7 +1544,8 @@ crucible/
     │   ├── ulid.go              # Monotonic ULID generator helper
     │   ├── schema/              # Raw .sql Schema Files (NO SQL in Go files for schema)
     │   │   ├── 001_initial.sql  # Users, user_totp_devices, totp_invites, ssh_keys, api_tokens, etc.
-    │   │   └── 002_indexes.sql  # Performance indexes
+    │   │   ├── 002_indexes.sql  # Performance indexes
+    │   │   └── 003_audit_ledger.sql # Audit ledger table, indexes, and anti-tamper triggers
     │   ├── store_auth.go        # User, sessions, multi-device TOTP & invite queries
     │   ├── store_tokens.go      # Multi-token PAT queries
     │   ├── store_ssh.go         # Git deploy key & Ansible host key queries
@@ -1566,6 +1567,17 @@ crucible/
     │   ├── sender.go            # SMTP client (TLS/STARTTLS, MIME attachment builder)
     │   ├── tokens.go            # Signed report view token generator & validator
     │   └── dispatch.go          # Webhook dispatcher for external systems
+    │
+    ├── logging/                 # Operational Structured Logging Feature (slog)
+    │   ├── logger.go            # slog initialization, stdout/stderr streaming, dynamic LevelVar
+    │   └── context.go           # Contextual tracing attributes (request_id, run_ulid, actor_id)
+    │
+    ├── audit/                   # Cryptographic Immutable Audit Ledger Feature
+    │   ├── models.go            # AuditEvent domain models, action slugs, actor types
+    │   ├── hasher.go            # Canonical SHA-256 record hash calculation & genesis seeding
+    │   ├── recorder.go          # Append-only ledger recorder linking previous_hash to HEAD
+    │   ├── verifier.go          # Full chain validation engine verifying sequence and hashes
+    │   └── store.go             # SQLite store queries for audit_ledger table
     │
     └── events/                  # In-Memory Event Bus
         ├── bus.go               # Pub/sub event broker
@@ -1920,14 +1932,120 @@ The build pipeline enforces automated quality, security auditing, vulnerability 
 
 ---
 
-## 22. Implementation Roadmap
+## 22. Operational Logging (`slog`) & Immutable Audit Ledger (`internal/audit/`)
+
+Crucible enforces a strict separation between **operational daemon logging** (runtime diagnostics, debug output, info traces) and **security/operational audit logging** (tamper-evident, compliance-grade action trails).
+
+### 22.1 Operational Daemon Logging with `log/slog`
+
+Normal operational logging streams directly to standard outputs (`stdout` and `stderr`) without touching database storage. This keeps database write IOPS low and delegates log aggregation to standard infrastructure tools (systemd journald, container logging drivers, syslog, vector/promtail).
+
+* **Pure Standard Library**: Built strictly on Go's `log/slog` (zero external dependencies).
+* **Dual Output Formats**:
+  * **Interactive / Terminal TTY Mode**: Colorized, human-friendly `slog.NewTextHandler` with high-contrast level badges and timestamp formatting via `internal/ui`.
+  * **Daemon / Production Mode**: Structured `slog.NewJSONHandler` outputting RFC 3339 timestamps, severity levels, source caller location (`file:line`), and structured key-value pairs.
+* **Contextual Tracing**:
+  * Request-scoped and run-scoped handlers automatically inject correlation context: `request_id`, `run_ulid`, `node_id`, `actor_id`, and `subsystem`.
+* **Dynamic Log Level Controller**:
+  * Thread-safe `slog.LevelVar` supporting runtime switching (`DEBUG`, `INFO`, `WARN`, `ERROR`) via `--log-level` flag, configuration files, or UNIX `SIGHUP` signals.
+
+---
+
+### 22.2 Cryptographically Immutable Audit Ledger in SQLite (`internal/audit/`)
+
+Unlike transient operational logs that stream to `stdout`/`stderr`, all security-sensitive actions and operational state mutations are stored in an append-only **SQLite audit table** (`audit_ledger`). This enables operators and auditors to query, inspect, and mathematically verify the action history from both the CLI (`cruciblectl audit`) and the Web UI (`/audit`).
+
+#### Cryptographic SHA-256 Hash Chaining
+Inspired by Git commit DAGs and blockchain tamper-evident ledgers, every audit record cryptographically seals the previous record's hash:
+
+```
+┌─────────────────────────────────┐       ┌─────────────────────────────────┐
+│ Audit Record #1 (Genesis)       │       │ Audit Record #2                 │
+│ seq:           1                │       │ seq:           2                │
+│ previous_hash: 0000000000...    │◄──────┼ previous_hash: SHA256(Record #1)│
+│ record_hash:   SHA256(Block #1) │       │ record_hash:   SHA256(Block #2) │
+└─────────────────────────────────┘       └─────────────────────────────────┘
+```
+
+* **Genesis Block (`seq = 1`)**: Uses a canonical seed of 64 zero characters (`0000000000000000000000000000000000000000000000000000000000000000`) for `previous_hash`.
+* **Subsequent Blocks (`seq > 1`)**: Must reference the exact `record_hash` of the record with sequence `seq - 1`.
+* **Canonical Record Hash Formula**:
+  $$\text{record\_hash} = \text{SHA-256}(seq \parallel ":" \parallel previous\_hash \parallel ":" \parallel timestamp \parallel ":" \parallel actor\_id \parallel ":" \parallel action \parallel ":" \parallel resource\_type \parallel ":" \parallel resource\_id \parallel ":" \parallel status \parallel ":" \parallel details)$$
+
+#### Audit Event Schema (`internal/storage/schema/003_audit_ledger.sql`)
+
+```sql
+CREATE TABLE IF NOT EXISTS audit_ledger (
+    seq            INTEGER PRIMARY KEY AUTOINCREMENT, -- Strictly monotonic sequence
+    id             TEXT NOT NULL UNIQUE,              -- Monotonic ULID (audit_01JBC...)
+    timestamp      TEXT NOT NULL,                     -- ISO 8601 UTC with nanosecond precision
+    actor_id       TEXT NOT NULL,                     -- User ULID, PAT token ULID, or system/peer node
+    actor_type     TEXT NOT NULL,                     -- user | token | system | cluster_peer
+    ip_address     TEXT NOT NULL,                     -- Client IP or "127.0.0.1" / "unix"
+    action         TEXT NOT NULL,                     -- Domain slug (e.g., auth.login.success)
+    resource_type  TEXT NOT NULL,                     -- run | secret | node | token | inventory | ssh_key
+    resource_id    TEXT NOT NULL,                     -- Target ULID or slug
+    status         TEXT NOT NULL,                     -- SUCCESS | FAILURE | DENIED
+    details        TEXT NOT NULL DEFAULT '{}',        -- Canonical JSON payload (scrubbed secrets)
+    previous_hash  TEXT NOT NULL,                     -- SHA-256 of record seq-1 (or 64 zeros)
+    record_hash    TEXT NOT NULL                      -- SHA-256 of canonical record tuple
+);
+
+CREATE INDEX IF NOT EXISTS idx_audit_ledger_timestamp ON audit_ledger (timestamp DESC);
+CREATE INDEX IF NOT EXISTS idx_audit_ledger_actor ON audit_ledger (actor_id, timestamp DESC);
+CREATE INDEX IF NOT EXISTS idx_audit_ledger_action ON audit_ledger (action, timestamp DESC);
+CREATE INDEX IF NOT EXISTS idx_audit_ledger_resource ON audit_ledger (resource_type, resource_id);
+```
+
+#### Database Immutability Enforcers (Anti-Tamper Triggers)
+SQLite triggers prevent any attempt by rogue queries or compromised sessions to update or delete audit records:
+
+```sql
+CREATE TRIGGER IF NOT EXISTS prevent_audit_update
+BEFORE UPDATE ON audit_ledger
+BEGIN
+    SELECT RAISE(ABORT, 'security violation: audit_ledger records are cryptographically immutable and cannot be updated');
+END;
+
+CREATE TRIGGER IF NOT EXISTS prevent_audit_delete
+BEFORE DELETE ON audit_ledger
+BEGIN
+    SELECT RAISE(ABORT, 'security violation: audit_ledger records are cryptographically immutable and cannot be deleted');
+END;
+```
+
+---
+
+### 22.3 Operator CLI Interface (`cruciblectl audit`)
+
+The operator CLI provides native tools for security auditing and chain verification:
+
+* **`cruciblectl audit list [--actor <id>] [--action <slug>] [--since <time>] [--limit <n>]`**: Formatted tabular view of recent audit actions with colorized status badges.
+* **`cruciblectl audit show <ulid>`**: Detailed breakdown of a single audit event, formatted JSON parameters, actor attribution, and hash chain linkage.
+* **`cruciblectl audit verify`**: Walks the entire hash chain from record 1 to HEAD. Recomputes all SHA-256 hashes and verifies backward linkage. Outputs `✓ Cryptographic Audit Chain Valid (N records verified, 0 anomalies)` or pinpoints exact tampered sequence numbers.
+* **`cruciblectl audit export [--format json|csv]`**: Exports audit records for ingestion into SIEMs, Splunk, Elasticsearch, or compliance cold storage.
+
+---
+
+### 22.4 Administrative Web UI Interface (`/audit`)
+
+The embedded Web dashboard provides an administrative audit view for security teams and compliance reviewers:
+* **Interactive Filter & Search**: Filter by actor, action slug, target resource, status, or date range.
+* **Integrity Status Banner**: Prominently displays the real-time cryptographic integrity check result (`[✓ AUDIT CHAIN VALID: 1,420 RECORDS VERIFIED]`).
+* **Audit Drawer**: Click any entry to inspect raw metadata, client user-agents, IP addresses, parameter diffs, and cryptographic hash proofs.
+
+---
+
+## 23. Implementation Roadmap
 
 ### Phase 1: Modular Flat Scaffolding & Feature Models
 1. Initialize Go module with vanity import path `gotcode.org/crucible` (Go 1.24+).
 2. Scaffold flat feature directory structure:
-   * `internal/version/`, `internal/ui/`, `internal/ansible/`, `internal/git/`, `internal/cluster/`, `internal/engine/`, `internal/auth/`, `internal/tokens/`, `internal/ssh/`, `internal/tls/`, `internal/schedule/`, `internal/storage/schema/`, `internal/metrics/`, `internal/notify/`, `internal/events/`.
+   * `internal/version/`, `internal/ui/`, `internal/logging/`, `internal/audit/`, `internal/ansible/`, `internal/git/`, `internal/cluster/`, `internal/engine/`, `internal/auth/`, `internal/tokens/`, `internal/ssh/`, `internal/tls/`, `internal/schedule/`, `internal/storage/schema/`, `internal/metrics/`, `internal/notify/`, `internal/events/`.
    * Zero layered nesting (`domain/`, `application/`, `transport/`, `ports/`).
 3. Define self-contained feature models with ULID identifiers:
+   * `internal/logging/`: `Logger`, `LogLevel`, `LogFormat`.
+   * `internal/audit/models.go`: `AuditEvent`, `ActorType`, `AuditAction`, `AuditStatus`.
    * `internal/ansible/models.go`: `Inventory`, `HostVars`, `GroupVars`, `CustomVars`, `InventoryGroup`, `InventoryHost`.
    * `internal/cluster/models.go`: `WorkerNode`, `WorkerAvailability`, `NodeHealth`, `ClusterState`, `ClusterPeer`, `ClusterLease`.
    * `internal/auth/models.go`: `User`, `UserSession`, `TOTPDevice`, `TOTPInvite`, `Role`, `Permission`.
@@ -1939,6 +2057,7 @@ The build pipeline enforces automated quality, security auditing, vulnerability 
 4. Author schema `.sql` files:
    * `internal/storage/schema/001_initial.sql` (ULID primary keys, `user_totp_devices`, `totp_invites`, `ssh_keys`, `netbox_inventory_cache`).
    * `internal/storage/schema/002_indexes.sql`.
+   * `internal/storage/schema/003_audit_ledger.sql` (Immutable audit ledger table, indexes, and anti-tamper triggers).
 5. Implement Hexagonal CQRS Version Subsystem (`internal/version/`):
    * Domain models (`BuildMetadata`, `DependencyInfo`, `Info`), validation (`Validate()`), human-readable and short formatters.
    * Outbound port (`MetadataProvider`) and inbound port (`QueryHandler`).
