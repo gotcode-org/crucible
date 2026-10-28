@@ -2,14 +2,14 @@
 
 Format: `[state] (Priority) [domain/binary] Task description @assignee +tag`
 
-| Element        | Description                                                |
-|----------------|------------------------------------------------------------|
-| [ ], [-], [x]  | Task State: [ ] = Open, [-] = In-Progress, [x] = Completed.|
-| (A), (B), (C)  | Task Priority (A = High, B = Medium, C = Low). Optional.   |
-| [crucibled]    | Target binary (crucibled, cruciblectl, shared).            |
-| [domain]       | Target domain (storage, secrets, reports, cluster, etc).   |
-| @name          | Context / Assignee (e.g., @jovens@gotcode.org).            |
-| +tag           | Project or state tag (e.g., +phase1, +security).           |
+| Element      | Type     | Description                                       |
+|:-------------|:---------|:--------------------------------------------------|
+| `[ ]`, `[x]` | State    | `[ ]` = Open, `[-]` = In-Progress, `[x]` = Done   |
+| `(A)`, `(B)` | Priority | Task priority: High (A), Medium (B), Low (C)     |
+| `[binary]`   | Target   | Binary target (`crucibled`, `cruciblectl`)        |
+| `[domain]`   | Domain   | Subsystem (`storage`, `secrets`, `reports`, etc.) |
+| `@name`      | Assignee | Primary context (e.g. `@jovens@gotcode.org`)     |
+| `+tag`       | Tag      | Milestone tag (e.g. `+phase1`, `+config`)         |
 
 ---
 
