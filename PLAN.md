@@ -2583,277 +2583,398 @@ teams and compliance reviewers:
 
 ---
 
-## 23. Implementation Roadmap
+## 23. Implementation Roadmap & Versioned Release Lifecycle
 
-### Phase 1: Modular Flat Scaffolding & Feature Models
-1. Initialize Go module with vanity import path `gotcode.org/crucible` (Go
-   1.24+).
-2. Scaffold flat feature directory structure:
-   * `internal/version/`, `internal/ui/`, `internal/config/`,
-     `internal/logging/`, `internal/audit/`, `internal/ansible/`, `internal/git/`,
-     `internal/cluster/`, `internal/engine/`, `internal/auth/`,
-     `internal/tokens/`, `internal/ssh/`, `internal/tls/`,
-     `internal/schedule/`, `internal/storage/schema/`, `internal/metrics/`,
-     `internal/notify/`, `internal/events/`.
-   * Zero layered nesting (`domain/`, `application/`, `transport/`, `ports/`).
-3. Define self-contained feature models with ULID identifiers:
-   * `internal/logging/`: `Logger`, `LogLevel`, `LogFormat`.
-   * `internal/audit/models.go`: `AuditEvent`, `ActorType`, `AuditAction`,
-     `AuditStatus`.
-   * `internal/ansible/models.go`: `Inventory`, `HostVars`, `GroupVars`,
-     `CustomVars`, `InventoryGroup`, `InventoryHost`.
-   * `internal/cluster/models.go`: `WorkerNode`, `WorkerAvailability`,
-     `NodeHealth`, `ClusterState`, `ClusterPeer`, `ClusterLease`.
-   * `internal/auth/models.go`: `User`, `UserSession`, `TOTPDevice`,
-     `TOTPInvite`, `Role`, `Permission`.
-   * `internal/tokens/models.go`: `APIToken`, `TokenMetadata` (multiple PATs
-     with ULIDs).
-   * `internal/ssh/models.go`: `SSHKey`, `KeyPair`.
-   * `internal/engine/models.go`: `Pipeline`, `Job`, `Run`, `JobEvent`,
-     `LogChunk`.
-   * `internal/schedule/models.go`: `Schedule`, `TriggerType`.
-   * `internal/events/events.go`: Lifecycle domain event definitions
-     (`WorkerAvailabilityChangedEvent`, `InventoryUpdatedEvent`,
-     `VarsUpdatedEvent`, `GitCommitBroadcastEvent`, etc.).
-4. Author schema `.sql` files:
-   * `internal/storage/schema/001_initial.sql` (ULID primary keys,
-     `user_totp_devices`, `totp_invites`, `ssh_keys`,
-     `netbox_inventory_cache`).
-   * `internal/storage/schema/002_indexes.sql`.
-   * `internal/storage/schema/003_audit_ledger.sql` (Immutable audit ledger
-     table, indexes, and anti-tamper triggers).
-5. Implement Hexagonal CQRS Version Subsystem (`internal/version/`):
-   * Domain models (`BuildMetadata`, `DependencyInfo`, `Info`), validation
-     (`Validate()`), human-readable and short formatters.
-   * Outbound port (`MetadataProvider`) and inbound port (`QueryHandler`).
-   * CQRS read query (`GetVersionQuery`) and query service coordinator
-     (`QueryService`).
-   * Concrete runtime adapter (`RuntimeMetadataProvider`) querying compiler
-     linker `-ldflags` (`AppVersion`, `GitBranch`, `GitCommit`, `BuildDate`),
-     `runtime.GOOS/GOARCH`, and embedded build info
-     (`runtime/debug.ReadBuildInfo`).
-   * Comprehensive table-driven unit tests isolating query business logic with
-     mock providers.
-6. Implement Terminal UI Subsystem (`internal/ui/`):
-   * Lip Gloss adaptive color palettes, bold/header styles, `SuccessMsg`,
-     `ErrorMsg`, and dynamic terminal width detection.
-   * Tabular version renderer (`PrintVersion`) using `text/tabwriter` and Lip
-     Gloss styling.
-   * ASCII banner logo and custom Cobra `HandleUsage` / `HandleHelp` formatters
-     with low cyclomatic complexity.
-   * Unit tests verifying message rendering, usage output, and version table
-     formatting.
-7. Implement Cobra Entrypoints (`cmd/crucibled/` and `cmd/cruciblectl/`):
-   * Entrypoint `main.go`, flags, and `version.go` subcommands wired to the
-     Hexagonal version service and Lip Gloss UI.
-   * Unit tests verifying command execution and flag handling via buffer
-     injection.
-8. Establish Pre-Build Security & Testing Pipeline in `Makefile`:
-   * Enforce build sequence: `tidy` -> `lint` (`golangci-lint`) -> `sec`
-     (`gosec` AST scanner) -> `vuln` (`govulncheck`) -> `test` (`go test
-     -race`) -> `build` (`CGO_ENABLED=0`).
-   * Linker `-ldflags` version metadata injection (`-X
-     gotcode.org/crucible/internal/version.AppVersion=...`).
-   * Root-anchored `.gitignore` (`/crucibled`, `/cruciblectl`, SQLite WAL,
-     reports).
-   * Pinned tooling (`gosec@v2.22.2`, `govulncheck@v1.1.4`) to prevent
-     unexpected toolchain switching on Go 1.24.
-9. Implement Configuration & Systemd Lifecycle Subsystem (`internal/config/`):
-   * Define `ServerConfig` and `ClientConfig` structures with 4-tier
-     precedence: Flags > Environment Variables (`CRUCIBLE_*`) > YAML
-     Configuration File (`crucibled.yaml`) > Defaults.
-   * Provide dev-friendly relative paths (`./var/crucible.db`, `./var/reports`)
-     and production systemd paths (`/var/lib/crucible/crucible.db`,
-     `/run/crucibled/crucible.sock`, `/etc/crucible/crucibled.yaml`).
-   * `crucibled config init [--prod]` and `crucibled config validate` Cobra
-     commands for YAML configuration lifecycle.
-   * `cruciblectl config init [--server <url>]` and `cruciblectl config
-     validate` Cobra commands with profile management.
-   * `crucibled systemd unit [--user crucible] [--port 443]` command outputting
-     hardened service unit with `CAP_NET_BIND_SERVICE` ambient capability,
-     `NoNewPrivileges=yes`, and systemd directory management (`StateDirectory`,
-     `RuntimeDirectory`, `ConfigurationDirectory`, `LogsDirectory`).
+Crucible follows a strict, release-driven **Vertical Feature Milestone**
+progression. Rather than building horizontal layers of inert models and waiting
+until late phases to wire entrypoints, every milestone delivers an end-to-end,
+independently testable capability spanning database queries, domain logic,
+Cobra CLI commands with Lip Gloss terminal presentation, and embedded Web UI
+views.
 
-### Phase 2: Core Feature Packages Implementation
-1. **SQLite Storage Engine (`internal/storage/`):**
-   * Pure Go with `modernc.org/sqlite` in WAL mode (`db.go`).
-   * ULID generator utility (`ulid.go` using `github.com/oklog/ulid/v2`).
-   * Schema migration loader in `migrate.go` executing `schema/*.sql` via
-     `//go:embed`.
-   * Repositories: `store_auth.go` (multi-device TOTP & invites),
-     `store_tokens.go` (multiple PATs), `store_ssh.go` (deploy and host keys),
-     `store_workers.go`, `store_leases.go`, `store_runs.go`,
-     `store_schedules.go`, and `store_inventory.go`.
-2. **Native HTTPS & Let's Encrypt (`internal/tls/`):**
-   * Custom certificate loader (`certs.go`).
-   * ACME TLS-ALPN-01 challenge engine for port 443 (`acme_alpn.go`).
-   * ACME DNS-01 challenge engine with pluggable DNS providers (`acme_dns.go`).
-   * Automated 30-day certificate renewal manager (`manager.go`).
-3. **Built-in SSH Key Management (`internal/ssh/`):**
-   * Pure Go Ed25519 & RSA 4096-bit keypair generator (`generator.go`).
-   * Public key formatters and fingerprint calculators.
-   * Handshake connection tester (`tester.go`).
-4. **Linux PAM, Multi-Device 2FA & RBAC (`internal/auth/`):**
-   * `pam.go`: Linux PAM authentication with POSIX group lookup.
-   * `totp.go`: Multi-device RFC 6238 TOTP verification (matches against any
-     active registered device for user, QR code generation).
-   * `invite.go`: Cryptographically signed TOTP invite URL generator &
-     validator for shared accounts (e.g. `root`).
-   * `rbac.go`: POSIX groups -> Crucible roles (`Viewer`, `Operator`,
-     `Maintainer`, `Admin`).
-   * `session.go`: Web session cookies and 5-minute pre-auth challenge tokens.
-5. **Personal Access Tokens (`internal/tokens/`):**
-   * High-entropy `cb_pat_<hex>` generator with ULID ID, SHA-256 hasher,
-     validator, and independent single-token revoker.
-6. **Git Synchronization & P2P Replication Engine (`internal/git/`):**
-   * Git working-tree client (`client.go`) managing clones, fast-forward pulls,
-     rebases, commits, and pushes using configured SSH deploy key.
-   * Background periodic sync ticker (`sync.go`) with 5m polling interval.
-   * On-demand pre-edit pull hook (`git pull --ff-only`).
-   * Working-tree mutex lock (`lock.go`) and atomic save pipeline (rebase ->
-     write -> commit -> push).
-   * P2P real-time commit broadcast listener (`p2p_sync.go`): triggers
-     immediate `git pull --ff-only` upon receiving gRPC commit broadcast from
-     peers.
-7. **Ansible Inventory, NetBox & Variables Engine (`internal/ansible/`):**
-   * Bidirectional parsing for YAML inventories and classic INI
-     (`parser_yaml.go`, `parser_ini.go`).
-   * NetBox dynamic inventory plugin runner (`netbox.go`): executes
-     `ansible-inventory` inside Python venv, caches parsed topology in SQLite.
-   * Group/host hierarchy tree extractor (`tree.go`).
-   * Variable precedence engine (`resolver.go`) calculating effective merged
-     variables with provenance source traces.
-   * Syntax validator (`validator.go`) returning exact line numbers on errors.
-   * Dynamic JSON inventory generator (`dynamic.go`).
-8. **Cluster Orchestration & Worker Pool (`internal/cluster/`):**
-   * Worker registry and pool managing connected gRPC streams
-     (`worker_pool.go`).
-   * Pure Go `/proc` sampler in `telemetry.go` reading CPU %, Load, and RAM.
-   * Routing filter (health + availability), least-loaded routing, overload
-     guardrails, and drain watcher.
-   * Heartbeat monitor & split-brain watchdog (`monitor.go`).
-   * Distributed lease manager & monotonic fencing tokens (`lease.go`).
-   * P2P mesh state replicator (`peer_manager.go`) broadcasting schedules,
-     runs, and git commit heads.
-9. **Execution Engine with Python Venv (`internal/engine/`):**
-   * Python venv detector and environment injector (`venv.go`): sets `PATH`,
-     `VIRTUAL_ENV`, executes `<venv>/bin/ansible-playbook`.
-   * SSH private key injector: injects `ansible_nodes` key via ephemeral agent
-     or `--private-key`.
-   * Local subprocess runner (`exec_local.go`) executing directly against
-     synchronized Git working copy.
-   * Remote gRPC worker executor (`exec_remote.go`).
-   * Non-blocking fan-out log broadcaster (`broadcaster.go`).
-   * Pipeline YAML validator & DAG runner (`pipeline.go`).
-10. **Schedule, Metrics & Notifications:**
-    * `internal/schedule/`: Cron and one-time timer scheduler.
-    * `internal/metrics/`: Prometheus recorder, peer federation registry, and
-      scrape handler.
-    * `internal/notify/`: Dispatch webhook alert client.
-    * `internal/events/`: In-memory pub/sub event bus.
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    CRUCIBLE VERSIONED RELEASE LIFECYCLE                     │
+│                                                                             │
+│  PHASE 1 (v0.1.0) — SOVEREIGN STANDALONE RUNNER (CLI + EMBEDDED WEB UI)     │
+│  • Config, systemd, pure Go SQLite persistence & ULID generator [DONE]      │
+│  • Database CLI lifecycle (`crucibled db migrate / status`)                 │
+│  • Standalone daemon runtime & embedded web server (`crucibled start`)      │
+│  • Linux PAM authentication & multi-device TOTP 2FA (CLI + Web UI)          │
+│  • PAT Token management (`cruciblectl token` + `/settings/tokens`)          │
+│  • Append-only audit ledger (`cruciblectl audit` + `/audit` web view)       │
+│  • Secrets vault with AES-256-GCM + FIFO injection (`crucibled vault`)      │
+│  • Local execution runner for playbooks & scripts (`crucibled run`)         │
+│  • Zero-RAM disk log streaming (`var/reports/`) & live web log tailing      │
+│  • Outlook-safe email notifications (`cruciblectl notify send`)             │
+│  ==> RESULT: Fully operational single-node platform with CLI AND Web UI!    │
+│                                      │                                      │
+│                                      ▼                                      │
+│  PHASE 2 (v0.2.0) — WORKER FLEET & DRAIN LIFECYCLE                          │
+│  • Remote worker daemon (`crucibled worker`) dial-home architecture         │
+│  • Maintenance states (`active`, `drain`, `paused`) & heartbeat watchdog    │
+│  • Split-brain failsafe execution freeze (`ISOLATED` mode)                  │
+│  • CLI & Web fleet management (`cruciblectl node` + `/cluster/workers`)     │
+│                                      │                                      │
+│                                      ▼                                      │
+│  PHASE 3 (v0.3.0) — CLUSTER PEER HA & UPSTREAM GIT                          │
+│  • Multi-server peer replication over mTLS gRPC                             │
+│  • Distributed leases & fencing tokens for exactly-once scheduling          │
+│  • Upstream Git single source of truth & P2P commit broadcasting            │
+│  • NetBox dynamic inventory sync & Web Inventory/Variables Studio           │
+│                                      │                                      │
+│                                      ▼                                      │
+│  PHASE 4 (v0.4.0) — NATIVE TLS & ADVANCED ENTERPRISE INTEGRATIONS           │
+│  • Native HTTPS, TLS-ALPN-01 & ACME automated Let's Encrypt renewal         │
+│  • Webhook triggers & event bus alerting                                    │
+│  • Prometheus metrics & cluster federation telemetry (/metrics)             │
+│                                      │                                      │
+│                                      ▼                                      │
+│  PHASE 5 (v1.0.0) — PRODUCTION HARDENING & ENTERPRISE RELEASE               │
+│  • Systemd service units & multi-distro packaging (RPM, DEB, AUR, Container)│
+│  • End-to-end cluster chaos testing, failover validation & performance audit│
+└─────────────────────────────────────────────────────────────────────────────┘
+```
 
-### Phase 3: Daemon Core CQRS Wiring & Integration Tests
-1. Implement command and query handlers wiring the flat feature packages with
-   ULID support.
-2. Feature integration tests verifying:
-   * Multi-device TOTP & invite URL redemption for shared `root` account.
-   * Multiple CLI PAT tokens with independent single-token revocation.
-   * SSH keypair generation, public key rendering, and connection testing.
-   * NetBox dynamic inventory parsing inside Python venv.
-   * Cluster P2P Git commit broadcast and immediate peer pull.
-   * External `.sql` file migration execution via `//go:embed`.
-   * Worker drain mode and split-brain interlock freeze.
+---
 
-### Phase 4: Protobuf Contract & gRPC Services
-1. Create `proto/crucible/crucible.proto` covering:
-   * Client API (`JobService`, `TokenService`, `WorkerService`,
-     `InventoryService`, `VarsService`, `SSHService`).
-   * Worker Mesh API (`WorkerMeshService`: Register, Heartbeat, ExecuteStream,
-     DrainNotice).
-   * Peer Cluster API (`PeerMeshService`: SyncState, AcquireLease, RenewLease,
-     SyncMetrics, BroadcastCommit).
-2. Generate Go protobuf bindings into `gen/crucible/`.
-3. Implement `cmd/crucibled/server_grpc.go` with interceptors for token auth,
-   RBAC, and worker handling.
+### Phase 1 (v0.1.0): Sovereign Standalone Runner (CLI + Embedded Web UI)
 
-### Phase 5: Embedded Web Dashboard, HTTPS, 2FA & Variables Studio
-1. Import and adapt web interface layout into `cmd/crucibled/web/` templates:
-   * Public dashboard with live runs and SSE streaming logs (`xterm.js`).
-   * Worker nodes table (`/cluster/workers`): live telemetry, health badges,
-     drain mode controls.
-   * Inventory & Variables Studio (`/inventory` & `/vars`): split-pane editor,
-     NetBox toggle, syntax validator, effective variable precedence inspector,
-     atomic save & push button.
-   * Multi-Device 2FA Management (`/settings/2fa`): list enrolled devices,
-     generate invite link, add device with QR, revoke single device.
-   * Invite Enrollment Page (`/enroll/2fa`): verify PAM password, scan QR code,
-     activate device.
-   * Personal Access Tokens view (`/settings/tokens`): create and revoke named
-     PATs for CLI.
-   * SSH Key Management (`/settings/ssh`): Git deploy key & Ansible host key
-     generation, one-click copy, import, connection tester.
-   * Login, 2FA challenge, and QR enrollment views.
-2. Implement HTTP router with RBAC middleware and native TLS/HTTPS in
-   `cmd/crucibled/server_http.go`.
-3. Expose federated `GET /metrics` via `promhttp.Handler()`.
+Phase 1 delivers a fully operational, sovereign automation platform
+capable of running as a single-node daemon on edge devices (Raspberry Pi)
+and Linux servers with zero external dependencies, complete with both an
+operator CLI and an embedded Web management console.
 
-### Phase 6: Operator CLI (`cruciblectl`)
-1. Implement Cobra commands and Lip Gloss (`github.com/charmbracelet/lipgloss`)
-   terminal UI styling in `cmd/cruciblectl/`:
-   * Render stylized terminal tables, status badges (`ACTIVE`, `DRAIN`,
-     `DOWN`), execution banners, and progress indicators via `internal/ui`.
-   * `cruciblectl version` (Formatted tabular metadata output with Go runtime
-     and dependency graph)
-   * `cruciblectl worker list|drain|active|status`
-   * `cruciblectl inventory list|get|create|edit|hosts|validate|export|delete`
-   * `cruciblectl vars list|get|set|edit|resolve`
-   * `cruciblectl auth login` (Interactive PAM + TOTP login creating named
-     token)
-   * `cruciblectl auth 2fa invite --username root --label <name>` (Generate
-     invite URL)
-   * `cruciblectl auth 2fa devices` & `cruciblectl auth 2fa revoke <device-id>`
-   * `cruciblectl token [create|list|revoke]` (Multiple PAT tokens)
-   * `cruciblectl ssh generate|show|import|test` (Manage deploy and host keys)
-   * `cruciblectl run <file.yaml> [--follow] [--target <dc>] [--venv <path>]`
-   * `cruciblectl logs <run-id> [-f] [--job <name>]`
-   * `cruciblectl status [run-id]`
-   * `cruciblectl cluster status`
-   * `cruciblectl schedule [list|create|delete]`
-   * `cruciblectl cancel <run-id>`
+#### Milestone 1-01: Build Tooling, Module Setup & Verification Pipeline [DONE]
+* Initialize Go module with `gotcode.org/crucible` targeting Go 1.24+.
+* Implement root `Makefile` enforcing pre-commit verification: `tidy` ->
+  `lint` (`golangci-lint`) -> `sec` (`gosec`) -> `vuln` (`govulncheck`) ->
+  `test` (`go test -race`) -> `build` (`CGO_ENABLED=0`).
+* Configure root-anchored `.gitignore` protecting SQLite WAL files, build
+  binaries, logs, and report shards.
 
-### Phase 7: Packaging, Systemd & Verification
-1. Create unified `Makefile` (`make all`: `tidy`, `lint`, `sec`, `vuln`,
-   `test`, `build`, `make package`).
-2. Provide systemd service units for Controller (`crucibled.service`) and
-   Worker (`crucibled-worker.service`).
-3. Verification Suite:
-   * **Verification 1: Standalone Single-Node Run**: Run Ansible playbook
-     inside Python venv; verify live logs.
-   * **Verification 2: Worker Drain & Failover**: Verify draining worker
-     rejects new jobs; verify watchdog flags unreachable nodes `DOWN`.
-   * **Verification 3: Split-Brain Interlock**: Verify isolated node freezes
-     executions.
-   * **Verification 4: Multiple CLI PAT Tokens**: Verify creating multiple
-     tokens under one user and revoking a single token leaves others
-     functional.
-   * **Verification 5: Multi-Device 2FA & Invite URL**: Enroll Device 1 for
-     `root`, generate invite link for Device 2, redeem invite via PAM
-     verification, verify both devices authenticate, and verify revoking Device
-     1 preserves Device 2.
-   * **Verification 6: Native HTTPS & ACME**: Verify HTTPS server starts with
-     custom certs and test Let's Encrypt TLS-ALPN-01 & DNS-01 challenge paths.
-   * **Verification 7: SSH Key Management**: Generate `git_sync` and
-     `ansible_nodes` keys; test SSH connection handshakes.
-   * **Verification 8: NetBox Dynamic Inventory**: Verify parsing
-     `inventory/netbox.yaml` inside Python venv and caching device topology in
-     SQLite.
-   * **Verification 9: Cluster Git Replication**: Trigger commit on Manager;
-     verify `BroadcastCommit` triggers instant `git pull --ff-only` on peer
-     nodes.
-   * **Verification 10: External `.sql` Schema & ULIDs**: Verify schema
-     initializes strictly from `schema/*.sql` and all primary keys are valid
-     monotonic ULIDs.
-   * **Verification 11: Prometheus Observability**: Verify `GET /metrics`
-     outputs local and peer metrics with `node` and `datacenter` labels.
+#### Milestone 1-02: Version Subsystem & Terminal UI Presentation [DONE]
+* Implement hexagonal version engine in `internal/version/` extracting linker
+  `-ldflags` metadata and embedded dependency manifests.
+* Implement terminal UI package in `internal/ui/` with Charm Lip Gloss styles,
+  adaptive color palettes, status badges, ASCII banner, and Cobra formatters.
+* Wire `version` command into `crucibled` and `cruciblectl` with
+  `--dependencies` flag.
+
+#### Milestone 1-03: Configuration Engine & systemd Unit Generator [DONE]
+* Implement `internal/config/` with 4-tier precedence: Flags > Environment
+  Variables (`CRUCIBLE_*`) > YAML Configuration File (`crucible.yaml`) >
+  Defaults.
+* Wire `crucibled config init [--prod]` and `crucibled config validate`.
+* Wire `cruciblectl config init [--server <url>]`, `validate`, and
+  `use-context` for profile management.
+* Wire `crucibled systemd unit` generating hardened systemd service unit with
+  `CAP_NET_BIND_SERVICE` ambient capability and directory isolation directives.
+
+#### Milestone 1-04: Pure Go SQLite Engine & Monotonic ULIDs [DONE]
+* Pinned pure Go SQLite driver (`modernc.org/sqlite v1.34.5`) in WAL mode with
+  `PRAGMA foreign_keys=ON;` and `PRAGMA busy_timeout=5000;`
+  (`internal/storage/`).
+* Implement monotonic ULID generator (`internal/storage/ulid.go`) with domain
+  prefixes (`run_`, `tok_`, `dev_`, `sec_`, `aud_`, `sch_`, `wrk_`, etc.).
+* Author raw external SQL migrations:
+  * `001_initial.sql`: 18 core relational tables with monotonic ULIDs.
+  * `002_indexes.sql`: 14 composite covering indexes.
+  * `003_audit_ledger.sql`: Append-only hash-chained ledger with anti-tamper
+    SQLite triggers.
+* Implement embedded migration runner (`internal/storage/migrate.go`) via
+  `//go:embed schema/*.sql`.
+
+#### Milestone 1-05: Database Lifecycle CLI Wiring (`crucibled db`)
+* Wire `storage.Engine` into `cmd/crucibled/db.go`.
+* Implement `crucibled db migrate [--config <file>]`:
+  * Probes or accepts configuration, creates database directory (`0700`),
+    opens SQLite database, runs pending migrations, and renders a Lip Gloss
+    table of applied migration versions.
+* Implement `crucibled db status [--config <file>]`:
+  * Inspects target SQLite database, checks integrity (`PRAGMA
+    integrity_check`), verifies WAL journal mode, queries schema version,
+    and displays database file size and table counts.
+* **Verification**: Run `crucibled db migrate` against `./var/crucible.db` and
+  inspect with `sqlite3`.
+
+#### Milestone 1-06: Standalone Server & Embedded Web Shell (`crucibled start`)
+* Implement standalone HTTP daemon in `cmd/crucibled/start.go` and
+  `internal/web/`:
+  * Listen on configured HTTP port (`:8080`) and UNIX domain socket
+    (`/run/crucibled/crucible.sock`).
+  * Embed web templates and static assets via Go `//go:embed`
+    (`web/templates/*.tmpl`, `web/static/*`).
+  * Implement base layout, clean CSS, navigation bar, and dark mode styling.
+  * Register health and status endpoints: `GET /healthz`, `GET /status`.
+  * Public landing dashboard view (`GET /`).
+  * Graceful shutdown handler with SIGTERM/SIGINT listeners.
+* Wire Cobra command `crucibled start [--config <file>]`.
+* **Verification**: Start daemon, query `GET /healthz` over HTTP and UNIX
+  socket, open browser to `http://localhost:8080/` to verify HTML rendering.
+
+#### Milestone 1-07: Linux PAM Authentication & Multi-Device TOTP 2FA
+* Implement Linux PAM system account authentication adapter
+  (`internal/auth/pam.go`).
+* Implement multi-device RFC 6238 TOTP engine with encrypted keys and QR code
+  generation (`internal/auth/totp.go`).
+* Implement cryptographically signed onboarding invite URLs for shared accounts
+  (e.g. `root`) in `internal/auth/invite.go`.
+* Implement web session cookie manager with constant-time token comparison.
+* Wire Operator CLI commands (`cmd/cruciblectl/auth.go`):
+  * `cruciblectl auth login` (PAM + TOTP interactive prompt).
+  * `cruciblectl auth 2fa devices` & `cruciblectl auth 2fa revoke <device-id>`.
+  * `cruciblectl auth 2fa invite --username root --label <name>`.
+* Wire Web UI views:
+  * `/login`: PAM username and password authentication form.
+  * `/auth/2fa`: 6-digit TOTP verification challenge page.
+  * `/settings/2fa`: Enrolled devices table, QR code enrollment modal, and
+    shared account invite URL generator.
+* **Verification**: Authenticate via CLI and browser, enroll a TOTP device via
+  QR code, test multi-device login, and redeem an invite link.
+
+#### Milestone 1-08: Personal Access Tokens Subsystem (`internal/tokens/`)
+* Implement high-entropy token generation (`cb_pat_<32-byte-hex>`) with SHA-256
+  storage in SQLite `api_tokens` table.
+* Implement token scope validator and permission model (`admin`, `operator`,
+  `viewer`).
+* Wire Operator CLI commands (`cmd/cruciblectl/token.go`):
+  * `cruciblectl token create --name <name> --role <role>` (displays plaintext
+    token exactly once with warning).
+  * `cruciblectl token list` (displays tabular list with ULID, name, prefix,
+    role, creation date, and last used telemetry).
+  * `cruciblectl token revoke <token-id>` (independent single-token
+    revocation).
+* Wire Web UI view (`/settings/tokens`):
+  * Personal Access Tokens table with role badges and last-used telemetry.
+  * "Create Token" modal displaying generated plaintext with one-click copy.
+  * Revoke action button with confirmation dialog.
+* **Verification**: Generate token in Web UI, configure `cruciblectl` profile
+  with token, verify CLI commands authenticate successfully with token.
+
+#### Milestone 1-09: Cryptographic Audit Ledger Subsystem (`internal/audit/`)
+* Implement append-only cryptographic audit recorder in `internal/audit/`:
+  * Compute SHA-256 hash chains (`record_hash = SHA256(prev_hash + fields)`).
+  * Genesis block linking with 64 zero characters for root entry.
+* Integrate audit recorder with `internal/auth/` and `internal/tokens/` so all
+  logins, token operations, and 2FA changes write audit records.
+* Wire Operator CLI commands (`cmd/cruciblectl/audit.go`):
+  * `cruciblectl audit list [--limit 50] [--actor <id>] [--action <action>]`:
+    displays formatted audit records in Lip Gloss tables.
+  * `cruciblectl audit verify`: traverses the full SQLite hash chain from
+    genesis block to head, re-computing SHA-256 proofs and reporting validation
+    status.
+* Wire Web UI view (`/audit`):
+  * Searchable audit log table with actor, action, resource, and status badges.
+  * Audit drawer: slide-out drawer showing raw metadata diffs and hash proofs.
+  * Real-time cryptographic validation badge (`[✓ AUDIT CHAIN VALID]`).
+* **Verification**: Trigger actions in Web UI and CLI, verify audit records in
+  both interfaces, run chain verification, and test anti-tamper triggers.
+
+#### Milestone 1-10: Secrets Vault Engine (`internal/secrets/`)
+* Implement AES-256-GCM + Argon2id envelope encryption engine in
+  `internal/secrets/`.
+* Implement seal/unseal state machine supporting master passphrases and Shamir
+  key shares (`vault_metadata`, `vault_secrets` tables).
+* Implement ephemeral tmpfs POSIX FIFO password streamer (`0600`) unlinked
+  immediately upon Ansible open.
+* Wire Operator CLI commands:
+  * `crucibled vault init [--shares N] [--threshold T]`: generates master key
+    and unseal shares.
+  * `crucibled vault status`: reports seal state (`SEALED` / `UNSEALED`).
+  * `crucibled vault unseal [--share <key>]`: unseals the secrets engine.
+  * `cruciblectl secret set <key>` and `cruciblectl secret get <key>`.
+* Wire Web UI view (`/settings/vault`):
+  * Seal status banner (`SEALED` / `UNSEALED`).
+  * Interactive unseal modal for entering passphrase or Shamir threshold keys.
+  * Secret key/value management table for authorized operators.
+* **Verification**: Initialize vault, unseal via Web UI, store secret, verify
+  sealed state on daemon restart, and unseal via CLI.
+
+#### Milestone 1-11: Local Runner & Zero-RAM Log Streaming (`internal/engine/`)
+* Implement Python virtual environment detector and manager
+  (`internal/engine/venv.go`).
+* Implement subprocess playbook runner (`internal/engine/exec_local.go`) using
+  `exec.CommandContext` with parameterized arguments and FIFO password
+  injection.
+* Implement zero-RAM disk log streaming (`internal/reports/`):
+  * Stream stdout and stderr directly to append-only disk files:
+    `var/reports/{shard}/{run_ulid}_{job_slug}.log`.
+  * Non-blocking fan-out channel broadcaster (`chan LogChunk, capacity 256`).
+* Enforce public vs. private job visibility:
+  * Public jobs visible on anonymous dashboard.
+  * Private jobs return `404 Not Found` to unauthenticated visitors.
+* Wire Operator CLI commands:
+  * `crucibled run <playbook.yaml> [--inventory <inv>] [--vault-secret <sec>]`
+  * `cruciblectl run <playbook.yaml> [--follow]`
+  * `cruciblectl logs <run-ulid> [-f]` (streams live logs or tails from disk).
+* Wire Web UI views:
+  * `/`: Dashboard showing active, completed, and queued runs.
+  * `/runs/{ulid}`: Live execution console with `xterm.js` / SSE streaming and
+    late-joining catch-up disk reader.
+  * `/reports/{shard}/{ulid}_{slug}.html`: Embedded HTML report viewer.
+* **Verification**: Run playbook from CLI, watch live terminal logs, watch
+  simultaneous live web console in browser, verify anonymous 404 isolation.
+
+#### Milestone 1-12: Hierarchical Email Notifications (`internal/notify/`)
+* Implement 3-tier recipient hierarchy resolver (pipeline root > group > task).
+* Implement bulletproof, Outlook MSO-safe HTML table notification templates.
+* Implement pure Go SMTP client with STARTTLS support.
+* Implement HMAC-SHA256 signed report view token generator for secure private
+  report access.
+* Wire Operator CLI commands:
+  * `cruciblectl notify send --to <email> --subject <subj> --report-id <id>`
+  * `cruciblectl notify test`: validates SMTP connectivity and credentials.
+* Wire Web UI integration:
+  * "Email Report" action modal on completed run view.
+* **Verification**: Send test email, verify MSO table rendering in Outlook, and
+  validate signed view tokens.
+
+#### Milestone 1-13: Release v0.1.0 Verification & Tagging
+* Run full verification suite: `make check` and `make build`.
+* Execute standalone verification checklist across BOTH CLI and Web UI:
+  * Configuration initialization and validation.
+  * Database creation, migration, and pragma checks.
+  * PAM login and multi-device TOTP 2FA.
+  * Personal access token creation and revocation.
+  * Audit ledger logging and cryptographic chain verification.
+  * Vault secret encryption and unseal lifecycle.
+  * Local playbook execution with live terminal and web console streaming.
+  * Email notification dispatch.
+* Cut official mainline release tag `v0.1.0`.
+
+---
+
+### Phase 2 (v0.2.0): Worker Fleet & Maintenance Lifecycle
+
+Phase 2 scales Crucible from a standalone runner to a distributed multi-node
+fleet with remote worker execution daemons, robust maintenance controls, and
+dedicated worker management in both CLI and Web UI.
+
+#### Milestone 2-01: Remote Worker Daemon (`crucibled worker`)
+* Implement lightweight, zero-state remote worker execution daemon.
+* Establish secure dial-home mTLS gRPC connection from worker to controller.
+* Implement streaming execution RPC: controller streams task requests; worker
+  executes playbooks and streams stdout/stderr back in real time.
+
+#### Milestone 2-02: Worker Lifecycle & Maintenance Drain Mode
+* Implement worker availability states: `active`, `drain`, and `paused`.
+* Implement drain interlock: when marked `drain`, the controller scheduler
+  immediately stops routing new jobs to the node while allowing running tasks
+  to terminate gracefully.
+* Implement automated heartbeat watchdog: marks unresponsive nodes `DOWN`
+  after 3 missed intervals and fails or reroutes pending jobs.
+* Implement `/proc` CPU and memory telemetry samplers for load-aware routing.
+
+#### Milestone 2-03: Split-Brain Prevention & Failsafe Execution Interlock
+* Implement network partition detection: when a worker or isolated controller
+  loses quorum, it enters `ISOLATED` state.
+* In `ISOLATED` state, freeze all job dispatching and scheduled cron triggers
+  immediately to eliminate dual-execution hazards.
+
+#### Milestone 2-04: Operator CLI & Web Worker Fleet Management
+* Wire Operator CLI commands in `cmd/cruciblectl/node.go`:
+  * `cruciblectl node list` (status badges: `ACTIVE`, `DRAIN`, `DOWN`).
+  * `cruciblectl node drain <node-id>`
+  * `cruciblectl node activate <node-id>`
+  * `cruciblectl node pause <node-id>`
+  * `cruciblectl node status <node-id>` (detailed telemetry and running jobs).
+* Wire Web UI view (`/cluster/workers`):
+  * Worker node fleet table with live telemetry sparklines, health badges,
+    and drain/active/pause action buttons.
+* **Verification**: Drain worker via Web UI, verify CLI reflects `DRAIN` badge,
+  verify in-flight tasks finish while new tasks are paused.
+
+#### Milestone 2-05: Release v0.2.0 Verification & Tagging
+* Verify drain lifecycle: drain worker, confirm zero new tasks dispatched,
+  verify in-flight task completes, confirm node goes to maintenance ready.
+* Verify watchdog: kill worker, confirm `DOWN` badge and job failover.
+* Cut official mainline release tag `v0.2.0`.
+
+---
+
+### Phase 3 (v0.3.0): Cluster Peer HA & Upstream Git
+
+Phase 3 introduces multi-controller high availability, state replication,
+upstream Git synchronization, and the Web Variables Studio.
+
+#### Milestone 3-01: Multi-Controller Peer Replication over mTLS gRPC
+* Implement peer-to-peer mesh connection manager (`internal/cluster/peer.go`).
+* Replicate active runs, schedules, and leases across controller peers.
+
+#### Milestone 3-02: Distributed Leases & Monotonic Fencing Tokens
+* Implement distributed lease manager in `internal/cluster/lease.go`.
+* Enforce "exactly-once" scheduled execution across peered controllers using
+  monotonic fencing tokens to prevent split-brain execution.
+
+#### Milestone 3-03: Upstream Git as Single Source of Truth & P2P Broadcast
+* Implement Git working-tree synchronizer (`internal/git/`):
+  * Clones and pulls upstream repositories over SSH.
+  * Working-tree mutex locks and atomic rebase/commit/push pipeline.
+* Implement P2P commit broadcasting: controller commits changes and broadcasts
+  commit hash over gRPC (`BroadcastCommit`), triggering instant
+  `git pull --ff-only` (<500ms) across all peers.
+* 5-minute fallback background sync timer.
+
+#### Milestone 3-04: NetBox Dynamic Inventory & Web Variables Studio
+* Implement bidirectional YAML/INI inventory parser (`internal/ansible/`).
+* Implement NetBox dynamic inventory plugin caching topology in SQLite.
+* Implement variable precedence engine calculating merged effective variables
+  with provenance source traces.
+* Wire Operator CLI: `cruciblectl inventory` and `cruciblectl vars`.
+* Wire Web UI: `/inventory` and `/vars` split-pane editor, syntax validator,
+  variable precedence inspector, and atomic save & Git broadcast button.
+
+#### Milestone 3-05: Release v0.3.0 Verification & Tagging
+* Verify dual-controller cluster: schedule recurring job, confirm exactly-once
+  execution via fencing lease.
+* Verify Git commit broadcast: push commit to Controller A, confirm
+  Controller B pulls within 500ms.
+* Cut official mainline release tag `v0.3.0`.
+
+---
+
+### Phase 4 (v0.4.0): Native TLS & Advanced Enterprise Integrations
+
+Phase 4 hardens the network edge with native HTTPS, ACME Let's Encrypt, and
+Prometheus observability.
+
+#### Milestone 4-01: Native HTTPS, TLS-ALPN-01 & ACME Automated Let's Encrypt
+* Implement native TLS manager in `internal/tls/` with custom cert support.
+* Implement ACME TLS-ALPN-01 challenge engine on port 443 and automated 30-day
+  renewal loop.
+
+#### Milestone 4-02: Prometheus Observability & Federation
+* Implement Prometheus `/metrics` scraping endpoint with node and datacenter
+  labels.
+* Federated metric collector scraping peer controllers and worker nodes.
+
+#### Milestone 4-03: Release v0.4.0 Verification & Tagging
+* Verify HTTPS server starts with custom certs and ACME Let's Encrypt path.
+* Cut official mainline release tag `v0.4.0`.
+
+---
+
+### Phase 5 (v1.0.0): Production Hardening & Enterprise Release
+
+Phase 5 hardens Crucible for mission-critical enterprise production
+deployments.
+
+#### Milestone 5-01: Systemd Packaging & Multi-Distro Distribution
+* Package systemd units, tmpfiles.d rules, and logrotate configs.
+* Multi-distro build automation: RPM (RHEL/CentOS/Rocky), DEB (Debian/Ubuntu),
+  AUR (Arch Linux), and minimal scratch container images.
+
+#### Milestone 5-02: End-to-End Cluster Chaos Testing & Verification
+* Chaos testing: inject simulated network partitions, verify `ISOLATED` freeze.
+* Kill random worker and controller nodes, verify zero duplicate runs and
+  automated lease failover.
+
+#### Milestone 5-03: Security Audits & v1.0.0 GA Release
+* Comprehensive third-party security review and penetration audit.
+* Memory wiping audits: ensure all unsealed secrets and private keys are zeroed
+  out immediately after use.
+* Cut official `v1.0.0` Production Release!
+
 
 
