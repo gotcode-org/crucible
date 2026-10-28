@@ -53,6 +53,8 @@ Format: `[state] (Priority) [domain/binary] Task description @assignee +tag`
 - [x] (B) [crucibled] Implement crucibled systemd unit generator command with
       ambient capabilities (CAP_NET_BIND_SERVICE) @jovens@gotcode.org +phase1
       +crucibled +systemd
+- [x] (A) [id] Implement domain entity monotonic ULID generator with standard
+      prefixes in internal/id @jovens@gotcode.org +phase1 +domain
 - [x] (A) [storage] Author external raw SQL migration 001_initial.sql with
       monotonic ULIDs @jovens@gotcode.org +phase1 +storage
 - [x] (A) [storage] Author external raw SQL index migration 002_indexes.sql
@@ -60,11 +62,8 @@ Format: `[state] (Priority) [domain/binary] Task description @assignee +tag`
 - [x] (A) [audit] Author raw SQL schema 003_audit_ledger.sql with monotonic
       ULIDs, SHA-256 hash chaining, and SQLite anti-tamper triggers
       @jovens@gotcode.org +phase1 +audit +storage
-- [x] (A) [storage] Implement modernc.org/sqlite pure Go WAL storage layer
-      (zero Cgo) @jovens@gotcode.org +phase1 +storage
-- [x] (A) [storage] Implement embedded go:embed SQL schema migration runner
-      @jovens@gotcode.org +phase1 +storage
-- [x] (A) [storage] Implement monotonic ULID generator and foreign key enforcer
+- [x] (A) [storage] Implement hexagonal Engine outbound port, CQRS Command &
+      Query services, and pure Go SQLite adapter in internal/storage
       @jovens@gotcode.org +phase1 +storage
 - [x] (A) [crucibled] Implement crucibled db migrate command with Lip Gloss
       applied migrations report table @jovens@gotcode.org +phase1 +storage +cli

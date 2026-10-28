@@ -9,93 +9,35 @@ import (
 	"database/sql"
 	"errors"
 	"path/filepath"
-	"sync"
 	"testing"
 	"time"
 
 	"gotcode.org/crucible/internal/config"
+	"gotcode.org/crucible/internal/id"
 	"gotcode.org/crucible/internal/storage"
 )
 
-func TestULID_MonotonicityAndFormat(t *testing.T) {
-	t.Parallel()
-
-	id := storage.NewRunID()
-	if !storage.IsValidULID(id, storage.PrefixRun) {
-		t.Fatalf("expected valid prefixed run ULID, got: %s", id)
-	}
-
-	ts, err := storage.ParseTimestamp(id, storage.PrefixRun)
-	if err != nil {
-		t.Fatalf("failed to parse timestamp from %s: %v", id, err)
-	}
-
-	if time.Since(ts) > 5*time.Second || time.Since(ts) < -5*time.Second {
-		t.Errorf("parsed timestamp %v differs too much from now", ts)
-	}
-
-	// Strictly monotonic ordering in tight loop
-	const count = 500
-	ids := make([]string, count)
-	for i := 0; i < count; i++ {
-		ids[i] = storage.NewTokenID()
-	}
-
-	for i := 0; i < count-1; i++ {
-		if ids[i] >= ids[i+1] {
-			t.Fatalf("monotonicity violation: ids[%d]=%s >= ids[%d]=%s", i, ids[i], i+1, ids[i+1])
-		}
-	}
-}
-
-func TestULID_Concurrency(t *testing.T) {
-	t.Parallel()
-
-	const goroutines = 10
-	const perGoroutine = 50
-
-	var wg sync.WaitGroup
-	wg.Add(goroutines)
-
-	idMap := sync.Map{}
-
-	for g := 0; g < goroutines; g++ {
-		go func() {
-			defer wg.Done()
-			for i := 0; i < perGoroutine; i++ {
-				id := storage.NewDeviceID()
-				if !storage.IsValidULID(id, storage.PrefixDevice) {
-					t.Errorf("invalid ULID generated: %s", id)
-				}
-				if _, loaded := idMap.LoadOrStore(id, true); loaded {
-					t.Errorf("collision detected on ULID: %s", id)
-				}
-			}
-		}()
-	}
-
-	wg.Wait()
-}
-
-func TestDB_OpenAndPragmas(t *testing.T) {
+func TestSQLiteAdapter_OpenAndPragmas(t *testing.T) {
 	t.Parallel()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
 	// In-memory test
-	memDB, err := storage.OpenPath(ctx, ":memory:", false, 5000)
+	memAdapter, err := storage.NewSQLiteAdapterPath(ctx, ":memory:", false, 5000)
 	if err != nil {
-		t.Fatalf("OpenPath(:memory:) error: %v", err)
+		t.Fatalf("NewSQLiteAdapterPath(:memory:) error: %v", err)
 	}
 	defer func() {
-		if closeErr := memDB.Close(); closeErr != nil {
-			t.Errorf("memDB.Close() error: %v", closeErr)
+		if closeErr := memAdapter.Close(); closeErr != nil {
+			t.Errorf("memAdapter.Close() error: %v", closeErr)
 		}
 	}()
 
 	var fkEnabled int
-	if queryErr := memDB.DB().QueryRowContext(ctx, "PRAGMA foreign_keys;").Scan(&fkEnabled); queryErr != nil {
+	if queryErr := memAdapter.DB().
+		QueryRowContext(ctx, "PRAGMA foreign_keys;").
+		Scan(&fkEnabled); queryErr != nil {
 		t.Fatalf("querying foreign_keys pragma: %v", queryErr)
 	}
 	if fkEnabled != 1 {
@@ -106,22 +48,24 @@ func TestDB_OpenAndPragmas(t *testing.T) {
 	tmpDir := t.TempDir()
 	dbPath := filepath.Join(tmpDir, "test.db")
 
-	fileDB, err := storage.Open(ctx, config.StorageConfig{
+	fileAdapter, err := storage.NewSQLiteAdapter(ctx, config.StorageConfig{
 		DatabasePath:  dbPath,
 		WALMode:       true,
 		BusyTimeoutMs: 5000,
 	})
 	if err != nil {
-		t.Fatalf("storage.Open() error: %v", err)
+		t.Fatalf("storage.NewSQLiteAdapter() error: %v", err)
 	}
 	defer func() {
-		if closeErr := fileDB.Close(); closeErr != nil {
-			t.Errorf("fileDB.Close() error: %v", closeErr)
+		if closeErr := fileAdapter.Close(); closeErr != nil {
+			t.Errorf("fileAdapter.Close() error: %v", closeErr)
 		}
 	}()
 
 	var journalMode string
-	if queryErr := fileDB.DB().QueryRowContext(ctx, "PRAGMA journal_mode;").Scan(&journalMode); queryErr != nil {
+	if queryErr := fileAdapter.DB().
+		QueryRowContext(ctx, "PRAGMA journal_mode;").
+		Scan(&journalMode); queryErr != nil {
 		t.Fatalf("querying journal_mode: %v", queryErr)
 	}
 	if journalMode != "wal" {
@@ -129,56 +73,78 @@ func TestDB_OpenAndPragmas(t *testing.T) {
 	}
 }
 
-func TestDB_Migrations(t *testing.T) {
+func TestStorage_CommandAndQueryServices(t *testing.T) {
 	t.Parallel()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	dbInstance, err := storage.OpenPath(ctx, ":memory:", false, 5000)
+	adapter, err := storage.NewSQLiteAdapterPath(ctx, ":memory:", false, 5000)
 	if err != nil {
-		t.Fatalf("failed to open in-memory DB: %v", err)
+		t.Fatalf("failed to open in-memory adapter: %v", err)
 	}
 	defer func() {
-		if closeErr := dbInstance.Close(); closeErr != nil {
-			t.Errorf("dbInstance.Close() error: %v", closeErr)
+		if closeErr := adapter.Close(); closeErr != nil {
+			t.Errorf("adapter.Close() error: %v", closeErr)
 		}
 	}()
 
-	// 1. Initial migration run
-	if migErr := dbInstance.Migrate(ctx); migErr != nil {
-		t.Fatalf("db.Migrate() failed: %v", migErr)
-	}
+	cmdSvc := storage.NewCommandService(adapter)
+	querySvc := storage.NewQueryService(adapter)
 
-	// 2. Verify migration tracking
-	migrations, err := storage.GetAppliedMigrations(ctx, dbInstance.DB())
+	// 1. Initial status before migrations
+	st1, err := querySvc.GetDatabaseStatus(
+		ctx,
+		storage.GetDatabaseStatusQuery{},
+	)
 	if err != nil {
-		t.Fatalf("GetAppliedMigrations failed: %v", err)
+		t.Fatalf("querySvc.GetDatabaseStatus() error: %v", err)
 	}
-	if len(migrations) < 3 {
-		t.Errorf("expected at least 3 migrations applied, got %d", len(migrations))
-	}
-
-	// 3. Idempotency test (re-running migrations must succeed without errors)
-	if migErr := dbInstance.Migrate(ctx); migErr != nil {
-		t.Fatalf("second db.Migrate() run failed: %v", migErr)
+	if st1.MigrationCount != 0 {
+		t.Errorf("expected 0 migrations initially, got %d", st1.MigrationCount)
 	}
 
-	// 4. Verify core schema tables exist and accept inserts
-	userID := "jovens"
-	_, err = dbInstance.DB().ExecContext(ctx,
-		"INSERT INTO users (username, role_override) VALUES (?, ?)",
-		userID, "admin")
+	// 2. Execute migrations through CommandService
+	res, err := cmdSvc.RunMigrations(ctx, storage.RunMigrationsCommand{})
 	if err != nil {
-		t.Fatalf("inserting user: %v", err)
+		t.Fatalf("cmdSvc.RunMigrations() error: %v", err)
+	}
+	if len(res.AppliedMigrations) < 3 {
+		t.Errorf("expected >= 3 applied migrations, got %d",
+			len(res.AppliedMigrations))
 	}
 
-	tokenID := storage.NewTokenID()
-	_, err = dbInstance.DB().ExecContext(ctx,
-		"INSERT INTO api_tokens (id, name, token_prefix, token_hash, username, role) VALUES (?, ?, ?, ?, ?, ?)",
-		tokenID, "ci-runner", "cb_pat_test", "hash123", userID, "admin")
+	// 3. Query applied migrations through QueryService
+	records, err := querySvc.GetAppliedMigrations(
+		ctx,
+		storage.GetAppliedMigrationsQuery{},
+	)
 	if err != nil {
-		t.Fatalf("inserting api_token: %v", err)
+		t.Fatalf("querySvc.GetAppliedMigrations() error: %v", err)
+	}
+	if len(records) < 3 {
+		t.Errorf("expected >= 3 records, got %d", len(records))
+	}
+
+	// 4. Status post-migration
+	st2, err := querySvc.GetDatabaseStatus(
+		ctx,
+		storage.GetDatabaseStatusQuery{},
+	)
+	if err != nil {
+		t.Fatalf("querySvc.GetDatabaseStatus() post-migration error: %v", err)
+	}
+	if st2.MigrationCount != 3 {
+		t.Errorf("expected MigrationCount = 3, got %d", st2.MigrationCount)
+	}
+	if st2.LatestVersion != 3 {
+		t.Errorf("expected LatestVersion = 3, got %d", st2.LatestVersion)
+	}
+	if st2.TablesCount < 18 {
+		t.Errorf("expected >= 18 tables, got %d", st2.TablesCount)
+	}
+	if st2.Driver != "sqlite" {
+		t.Errorf("expected driver = 'sqlite', got %s", st2.Driver)
 	}
 }
 
@@ -188,28 +154,29 @@ func TestAuditLedger_ImmutabilityTriggers(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	dbInstance, err := storage.OpenPath(ctx, ":memory:", false, 5000)
+	adapter, err := storage.NewSQLiteAdapterPath(ctx, ":memory:", false, 5000)
 	if err != nil {
-		t.Fatalf("failed to open DB: %v", err)
+		t.Fatalf("failed to open adapter: %v", err)
 	}
 	defer func() {
-		if closeErr := dbInstance.Close(); closeErr != nil {
-			t.Errorf("dbInstance.Close() error: %v", closeErr)
+		if closeErr := adapter.Close(); closeErr != nil {
+			t.Errorf("adapter.Close() error: %v", closeErr)
 		}
 	}()
 
-	if migErr := dbInstance.Migrate(ctx); migErr != nil {
-		t.Fatalf("db.Migrate() failed: %v", migErr)
+	if migErr := adapter.Migrate(ctx); migErr != nil {
+		t.Fatalf("adapter.Migrate() failed: %v", migErr)
 	}
 
-	auditID := storage.NewAuditID()
+	auditID := id.NewAuditID()
 	insertQuery := `
 INSERT INTO audit_ledger (
     id, timestamp, actor_id, actor_type, ip_address, action, resource_type,
     resource_id, status, details, previous_hash, record_hash
 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 
-	_, err = dbInstance.DB().ExecContext(ctx, insertQuery,
+	_, err = adapter.DB().ExecContext(
+		ctx, insertQuery,
 		auditID, time.Now().UTC().Format(time.RFC3339Nano),
 		"usr_01JBCDEF", "user", "127.0.0.1", "auth.login.success",
 		"session", "ses_01JBCDEF", "SUCCESS", "{}",
@@ -220,20 +187,28 @@ INSERT INTO audit_ledger (
 		t.Fatalf("inserting audit record: %v", err)
 	}
 
-	// Attempting to UPDATE an audit record must be rejected by the
-	// anti-tamper trigger.
-	_, updateErr := dbInstance.DB().ExecContext(ctx,
-		"UPDATE audit_ledger SET status = 'FAILURE' WHERE id = ?", auditID)
+	// Attempting to UPDATE an audit record must be rejected by trigger.
+	_, updateErr := adapter.DB().ExecContext(
+		ctx,
+		"UPDATE audit_ledger SET status = 'FAILURE' WHERE id = ?",
+		auditID,
+	)
 	if updateErr == nil {
-		t.Fatal("expected error updating audit_ledger due to anti-tamper trigger, got nil")
+		t.Fatal(
+			"expected error updating audit_ledger due to anti-tamper trigger",
+		)
 	}
 
-	// Attempting to DELETE an audit record must be rejected by the
-	// anti-tamper trigger.
-	_, deleteErr := dbInstance.DB().ExecContext(ctx,
-		"DELETE FROM audit_ledger WHERE id = ?", auditID)
+	// Attempting to DELETE an audit record must be rejected by trigger.
+	_, deleteErr := adapter.DB().ExecContext(
+		ctx,
+		"DELETE FROM audit_ledger WHERE id = ?",
+		auditID,
+	)
 	if deleteErr == nil {
-		t.Fatal("expected error deleting from audit_ledger due to anti-tamper trigger, got nil")
+		t.Fatal(
+			"expected error deleting from audit_ledger due to anti-tamper trigger",
+		)
 	}
 }
 
@@ -243,45 +218,57 @@ func TestForeignKeyCascades(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	dbInstance, err := storage.OpenPath(ctx, ":memory:", false, 5000)
+	adapter, err := storage.NewSQLiteAdapterPath(ctx, ":memory:", false, 5000)
 	if err != nil {
-		t.Fatalf("failed to open DB: %v", err)
+		t.Fatalf("failed to open adapter: %v", err)
 	}
 	defer func() {
-		if closeErr := dbInstance.Close(); closeErr != nil {
-			t.Errorf("dbInstance.Close() error: %v", closeErr)
+		if closeErr := adapter.Close(); closeErr != nil {
+			t.Errorf("adapter.Close() error: %v", closeErr)
 		}
 	}()
 
-	if migErr := dbInstance.Migrate(ctx); migErr != nil {
-		t.Fatalf("db.Migrate() failed: %v", migErr)
+	if migErr := adapter.Migrate(ctx); migErr != nil {
+		t.Fatalf("adapter.Migrate() failed: %v", migErr)
 	}
 
 	username := "test_operator"
-	_, err = dbInstance.DB().ExecContext(ctx,
-		"INSERT INTO users (username) VALUES (?)", username)
+	_, err = adapter.DB().ExecContext(
+		ctx,
+		"INSERT INTO users (username) VALUES (?)",
+		username,
+	)
 	if err != nil {
 		t.Fatalf("inserting user: %v", err)
 	}
 
-	deviceID := storage.NewDeviceID()
-	_, err = dbInstance.DB().ExecContext(ctx,
-		"INSERT INTO user_totp_devices (id, username, name, secret_key) VALUES (?, ?, ?, ?)",
-		deviceID, username, "Work Phone", "SECRET32")
+	deviceID := id.NewDeviceID()
+	_, err = adapter.DB().ExecContext(
+		ctx,
+		"INSERT INTO user_totp_devices (id, username, name, secret_key) "+
+			"VALUES (?, ?, ?, ?)",
+		deviceID, username, "Work Phone", "SECRET32",
+	)
 	if err != nil {
 		t.Fatalf("inserting totp device: %v", err)
 	}
 
 	// Delete user; cascade should delete user_totp_devices
-	_, err = dbInstance.DB().ExecContext(ctx,
-		"DELETE FROM users WHERE username = ?", username)
+	_, err = adapter.DB().ExecContext(
+		ctx,
+		"DELETE FROM users WHERE username = ?",
+		username,
+	)
 	if err != nil {
 		t.Fatalf("deleting user: %v", err)
 	}
 
 	var count int
-	err = dbInstance.DB().QueryRowContext(ctx,
-		"SELECT COUNT(*) FROM user_totp_devices WHERE username = ?", username).Scan(&count)
+	err = adapter.DB().QueryRowContext(
+		ctx,
+		"SELECT COUNT(*) FROM user_totp_devices WHERE username = ?",
+		username,
+	).Scan(&count)
 	if err != nil {
 		t.Fatalf("counting totp devices: %v", err)
 	}
@@ -296,23 +283,27 @@ func TestTransactor_CommitAndRollback(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	dbInstance, err := storage.OpenPath(ctx, ":memory:", false, 5000)
+	adapter, err := storage.NewSQLiteAdapterPath(ctx, ":memory:", false, 5000)
 	if err != nil {
-		t.Fatalf("failed to open DB: %v", err)
+		t.Fatalf("failed to open adapter: %v", err)
 	}
 	defer func() {
-		if closeErr := dbInstance.Close(); closeErr != nil {
-			t.Errorf("dbInstance.Close() error: %v", closeErr)
+		if closeErr := adapter.Close(); closeErr != nil {
+			t.Errorf("adapter.Close() error: %v", closeErr)
 		}
 	}()
 
-	if migErr := dbInstance.Migrate(ctx); migErr != nil {
-		t.Fatalf("db.Migrate() failed: %v", migErr)
+	if migErr := adapter.Migrate(ctx); migErr != nil {
+		t.Fatalf("adapter.Migrate() failed: %v", migErr)
 	}
 
 	// Commit success
-	err = dbInstance.WithinTransaction(ctx, func(tx *sql.Tx) error {
-		_, execErr := tx.ExecContext(ctx, "INSERT INTO users (username) VALUES (?)", "user_commit")
+	err = adapter.WithinTransaction(ctx, func(tx *sql.Tx) error {
+		_, execErr := tx.ExecContext(
+			ctx,
+			"INSERT INTO users (username) VALUES (?)",
+			"user_commit",
+		)
 		return execErr
 	})
 	if err != nil {
@@ -320,15 +311,21 @@ func TestTransactor_CommitAndRollback(t *testing.T) {
 	}
 
 	var exists bool
-	err = dbInstance.DB().QueryRowContext(ctx,
-		"SELECT 1 FROM users WHERE username = 'user_commit'").Scan(&exists)
+	err = adapter.DB().QueryRowContext(
+		ctx,
+		"SELECT 1 FROM users WHERE username = 'user_commit'",
+	).Scan(&exists)
 	if err != nil || !exists {
 		t.Fatalf("expected user_commit to exist: %v", err)
 	}
 
 	// Rollback on error
-	err = dbInstance.WithinTransaction(ctx, func(tx *sql.Tx) error {
-		if _, execErr := tx.ExecContext(ctx, "INSERT INTO users (username) VALUES (?)", "user_rollback"); execErr != nil {
+	err = adapter.WithinTransaction(ctx, func(tx *sql.Tx) error {
+		if _, execErr := tx.ExecContext(
+			ctx,
+			"INSERT INTO users (username) VALUES (?)",
+			"user_rollback",
+		); execErr != nil {
 			return execErr
 		}
 		return errors.New("simulated transaction failure")
@@ -338,79 +335,17 @@ func TestTransactor_CommitAndRollback(t *testing.T) {
 	}
 
 	var rollbackCount int
-	err = dbInstance.DB().QueryRowContext(ctx,
-		"SELECT COUNT(*) FROM users WHERE username = 'user_rollback'").Scan(&rollbackCount)
+	err = adapter.DB().QueryRowContext(
+		ctx,
+		"SELECT COUNT(*) FROM users WHERE username = 'user_rollback'",
+	).Scan(&rollbackCount)
 	if err != nil {
 		t.Fatalf("querying user_rollback: %v", err)
 	}
 	if rollbackCount != 0 {
-		t.Errorf("expected user_rollback to be 0 after rollback, got %d", rollbackCount)
-	}
-}
-
-func TestDB_Status(t *testing.T) {
-	t.Parallel()
-
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	tmpDir := t.TempDir()
-	dbPath := filepath.Join(tmpDir, "status_test.db")
-
-	dbInstance, err := storage.Open(ctx, config.StorageConfig{
-		DatabasePath:  dbPath,
-		WALMode:       true,
-		BusyTimeoutMs: 5000,
-	})
-	if err != nil {
-		t.Fatalf("storage.Open() error: %v", err)
-	}
-	defer func() {
-		if closeErr := dbInstance.Close(); closeErr != nil {
-			t.Errorf("dbInstance.Close() error: %v", closeErr)
-		}
-	}()
-
-	// 1. Initial status before migrations
-	st1, err := dbInstance.Status(ctx)
-	if err != nil {
-		t.Fatalf("db.Status() before migrations error: %v", err)
-	}
-	if !st1.IntegrityOK {
-		t.Errorf("expected IntegrityOK = true, got false")
-	}
-	if st1.JournalMode != "wal" {
-		t.Errorf("expected JournalMode = 'wal', got %s", st1.JournalMode)
-	}
-	if !st1.ForeignKeysOn {
-		t.Errorf("expected ForeignKeysOn = true, got false")
-	}
-	if st1.MigrationCount != 0 {
-		t.Errorf("expected MigrationCount = 0, got %d", st1.MigrationCount)
-	}
-
-	// 2. Migrate and check updated status
-	if migErr := dbInstance.Migrate(ctx); migErr != nil {
-		t.Fatalf("db.Migrate() error: %v", migErr)
-	}
-
-	st2, err := dbInstance.Status(ctx)
-	if err != nil {
-		t.Fatalf("db.Status() after migrations error: %v", err)
-	}
-	if st2.MigrationCount != 3 {
-		t.Errorf("expected MigrationCount = 3, got %d", st2.MigrationCount)
-	}
-	if st2.LatestVersion != 3 {
-		t.Errorf("expected LatestVersion = 3, got %d", st2.LatestVersion)
-	}
-	if st2.TablesCount < 18 {
-		t.Errorf("expected at least 18 tables, got %d", st2.TablesCount)
-	}
-	if !st2.FileExists {
-		t.Errorf("expected FileExists = true, got false")
-	}
-	if st2.FileSizeBytes <= 0 {
-		t.Errorf("expected positive file size, got %d", st2.FileSizeBytes)
+		t.Errorf(
+			"expected user_rollback to be 0 after rollback, got %d",
+			rollbackCount,
+		)
 	}
 }

@@ -9,32 +9,65 @@ import (
 	"database/sql"
 )
 
-// Engine defines the inbound hexagonal port for the SQLite persistence
-// subsystem.
+// CommandHandler defines the inbound hexagonal port for database
+// write/mutation operations such as applying schema migrations.
+type CommandHandler interface {
+	// RunMigrations executes pending schema migrations on the database engine.
+	RunMigrations(
+		ctx context.Context,
+		cmd RunMigrationsCommand,
+	) (*RunMigrationsResult, error)
+}
+
+// QueryHandler defines the inbound hexagonal port for read-only database
+// inspection, integrity verification, and status queries.
+type QueryHandler interface {
+	// GetDatabaseStatus retrieves operational metrics, pragmas, and integrity.
+	GetDatabaseStatus(
+		ctx context.Context,
+		q GetDatabaseStatusQuery,
+	) (*Status, error)
+
+	// GetAppliedMigrations returns the chronological record of schema
+	// migrations.
+	GetAppliedMigrations(
+		ctx context.Context,
+		q GetAppliedMigrationsQuery,
+	) ([]MigrationRecord, error)
+}
+
+// Engine defines the outbound hexagonal port for relational database adapters
+// (e.g. SQLite, PostgreSQL, MySQL).
 type Engine interface {
+	// Driver returns the canonical SQL driver name (e.g. "sqlite", "postgres").
+	Driver() string
+
+	// Path returns the canonical database filesystem path or DSN endpoint.
+	Path() string
+
 	// DB returns the underlying standard library SQL connection pool.
 	DB() *sql.DB
 
-	// Path returns the canonical filesystem path of the database.
-	Path() string
-
-	// Ping checks the health of the SQLite connection pool.
+	// Ping checks connectivity to the database engine.
 	Ping(ctx context.Context) error
 
 	// Migrate executes external schema migrations embedded in the binary.
 	Migrate(ctx context.Context) error
 
-	// Status queries operational diagnostics and metadata for the database.
+	// Status queries operational diagnostics, integrity, and runtime metrics.
 	Status(ctx context.Context) (*Status, error)
 
-	// Close terminates the connection pool and checkpoints WAL journals.
+	// AppliedMigrations retrieves the list of executed migrations.
+	AppliedMigrations(ctx context.Context) ([]MigrationRecord, error)
+
+	// Close terminates the connection pool and checkpoints pending journals.
 	Close() error
 }
 
-// Transactor defines an interface for executing operations within an isolated
-// transaction.
+// Transactor defines the outbound hexagonal port for executing operations
+// within an isolated transaction.
 type Transactor interface {
-	// WithinTransaction runs fn inside a database transaction, rolling
-	// back on error.
+	// WithinTransaction runs fn inside an isolated database transaction,
+	// automatically committing on success or rolling back on error.
 	WithinTransaction(ctx context.Context, fn func(tx *sql.Tx) error) error
 }

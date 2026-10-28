@@ -16,21 +16,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     resolution (flags, environment variables, YAML configuration files, and
     embedded defaults), domain models for `ServerConfig`, `ClientConfig`,
     `StorageConfig`, and `SystemdOptions`, and filesystem/environment adapters.
-  - Pure Go SQLite Persistence Subsystem
-    ([`internal/storage/`](./internal/storage/)) utilizing `modernc.org/sqlite`
-    in WAL mode with foreign key enforcement and busy timeout configuration.
-  - Embedded SQL Migration Runner
-    ([`internal/storage/migrate.go`](./internal/storage/migrate.go)) using Go
-    `//go:embed` for external SQL scripts, transactional migrations, and
-    schema version tracking in `schema_migrations`.
-  - Concurrency-Safe Monotonic ULID Generator
-    ([`internal/storage/ulid.go`](./internal/storage/ulid.go)) using
-    `github.com/oklog/ulid/v2` with domain entity prefixes (`run_`, `tok_`,
-    `dev_`, `inv_`, `sec_`, `ses_`, `aud_`, `sch_`, `ssh_`, `wrk_`, `nbc_`).
-  - Database Status and Diagnostics Port
-    ([`internal/storage/status.go`](./internal/storage/status.go)) providing
-    integrity checking (`PRAGMA integrity_check`), WAL mode verification,
-    busy timeout reporting, table counts, and migration version metadata.
+  - Hexagonal Relational Persistence Subsystem
+    ([`internal/storage/`](./internal/storage/)) with outbound `Engine` and
+    `Transactor` ports, inbound CQRS `CommandHandler` and `QueryHandler`
+    services, and pure Go SQLite adapter
+    ([`adapter_sqlite.go`](./internal/storage/adapter_sqlite.go))
+    utilizing `modernc.org/sqlite` in WAL mode with foreign keys.
+  - Concurrency-Safe Monotonic ULID Identity Subsystem
+    ([`internal/id/`](./internal/id/)) providing domain entity identifier
+    generation with standard category prefixes (`run_`, `tok_`, `dev_`,
+    `inv_`, `sec_`, `ses_`, `aud_`, `sch_`, `ssh_`, `wrk_`, `nbc_`).
   - Hexagonal CQRS Version Subsystem
     ([`internal/version/`](./internal/version/)) providing runtime build
     metadata extraction, dependency introspection, and tabular/JSON

@@ -46,33 +46,33 @@ func dbMigrateCmd() *cobra.Command {
 		Short: "Apply all pending embedded schema migrations to the database",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			ctx := cmd.Context()
-			dbInstance, err := openDatabase(ctx, configPath, dbPath)
+			engine, err := openEngine(ctx, configPath, dbPath)
 			if err != nil {
 				return err
 			}
 			defer func() {
-				if closeErr := dbInstance.Close(); closeErr != nil {
+				if closeErr := engine.Close(); closeErr != nil {
 					_ = closeErr
 				}
 			}()
 
-			if mErr := dbInstance.Migrate(ctx); mErr != nil {
+			cmdSvc := storage.NewCommandService(engine)
+			res, mErr := cmdSvc.RunMigrations(
+				ctx,
+				storage.RunMigrationsCommand{},
+			)
+			if mErr != nil {
 				return fmt.Errorf("executing migrations: %w", mErr)
 			}
 
-			records, recErr := storage.GetAppliedMigrations(ctx, dbInstance.DB())
-			if recErr != nil {
-				return fmt.Errorf("retrieving applied migrations: %w", recErr)
-			}
-
 			w := cmd.OutOrStdout()
-			if err := printMigrationsTable(w, records); err != nil {
+			if err := printMigrationsTable(w, res.AppliedMigrations); err != nil {
 				return err
 			}
 
 			msg := ui.SuccessMsg(
 				"Database successfully migrated (%s)",
-				dbInstance.Path(),
+				res.DatabasePath,
 			)
 			_, printErr := fmt.Fprintln(w, msg)
 			return printErr
@@ -109,17 +109,21 @@ func dbStatusCmd() *cobra.Command {
 			"and schema version",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			ctx := cmd.Context()
-			dbInstance, err := openDatabase(ctx, configPath, dbPath)
+			engine, err := openEngine(ctx, configPath, dbPath)
 			if err != nil {
 				return err
 			}
 			defer func() {
-				if closeErr := dbInstance.Close(); closeErr != nil {
+				if closeErr := engine.Close(); closeErr != nil {
 					_ = closeErr
 				}
 			}()
 
-			st, stErr := dbInstance.Status(ctx)
+			querySvc := storage.NewQueryService(engine)
+			st, stErr := querySvc.GetDatabaseStatus(
+				ctx,
+				storage.GetDatabaseStatusQuery{},
+			)
 			if stErr != nil {
 				return fmt.Errorf("querying database status: %w", stErr)
 			}
@@ -147,10 +151,10 @@ func dbStatusCmd() *cobra.Command {
 	return cmd
 }
 
-func openDatabase(
+func openEngine(
 	ctx context.Context,
 	configPath, dbOverride string,
-) (*storage.DB, error) {
+) (storage.Engine, error) {
 	svc := config.DefaultQueryService()
 	var flagOverrides config.ServerFlagOverrides
 	if dbOverride != "" {
@@ -166,7 +170,7 @@ func openDatabase(
 		return nil, fmt.Errorf("loading server configuration: %w", err)
 	}
 
-	dbInstance, err := storage.Open(ctx, cfg.Storage)
+	adapter, err := storage.NewSQLiteAdapter(ctx, cfg.Storage)
 	if err != nil {
 		return nil, fmt.Errorf(
 			"opening database at %s: %w",
@@ -175,7 +179,7 @@ func openDatabase(
 		)
 	}
 
-	return dbInstance, nil
+	return adapter, nil
 }
 
 func printMigrationsTable(
@@ -271,6 +275,7 @@ func printStatusTable(w io.Writer, st *storage.Status) error {
 	}
 
 	rows := []kv{
+		{"Driver", st.Driver},
 		{"Database Path", st.DatabasePath},
 		{"Status", stateStr},
 		{"File Size", formatBytes(st.FileSizeBytes)},

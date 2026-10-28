@@ -162,13 +162,13 @@ Pi**, integrating cleanly with upstream Git repositories and notifications.
   ad-hoc job triggers, log tailing, schedule administration, worker node
   monitoring, and token management.
 * **Flat Feature Package Layout:** Modular, feature-by-feature layout directly
-  under `internal/` (`internal/version/`, `internal/ui/`, `internal/ansible/`,
-  `internal/git/`, `internal/cluster/`, `internal/engine/`, `internal/auth/`,
-  `internal/tokens/`, `internal/ssh/`, `internal/tls/`, `internal/storage/`,
-  `internal/schedule/`, `internal/metrics/`, `internal/notify/`,
-  `internal/events/`). Zero layered nesting (`domain/`, `application/`,
-  `transport/`, `ports/`). Each feature folder encapsulates its models,
-  business logic, and store methods.
+  under `internal/` (`internal/version/`, `internal/ui/`, `internal/id/`,
+  `internal/ansible/`, `internal/git/`, `internal/cluster/`,
+  `internal/engine/`, `internal/auth/`, `internal/tokens/`, `internal/ssh/`,
+  `internal/tls/`, `internal/storage/`, `internal/schedule/`,
+  `internal/metrics/`, `internal/notify/`, `internal/events/`). Zero layered
+  nesting (`domain/`, `application/`, `transport/`, `ports/`). Each feature
+  folder encapsulates its models, business logic, and store methods.
 * **Automated Security & Vulnerability Pipeline:** Mandatory pre-build security
   auditing integrating `gosec` (AST source code security scanner) and
   `govulncheck` (Go vulnerability database checker) chained directly into `make
@@ -1933,6 +1933,10 @@ crucible/
     │   ├── adapter_runtime.go   # Concrete adapter querying linker ldflags, runtime, and debug.BuildInfo
     │   └── version_test.go      # Table-driven unit tests isolating query logic
     │
+    ├── id/                      # Domain Entity Identifier Subsystem
+    │   ├── id.go                # Monotonic ULID generator & entity prefixes (run_, tok_, etc.)
+    │   └── id_test.go           # Concurrency & monotonicity validation tests
+    │
     ├── ui/                      # Lip Gloss Terminal UI Styling & Views
     │   ├── styles.go            # Adaptive color palettes, bold headers, Success/Error message helpers
     │   ├── views.go             # ASCII banner logo, custom Cobra HandleUsage & HandleHelp formatters
@@ -2019,23 +2023,17 @@ crucible/
     │   ├── fifo.go            # Pure-Go ephemeral FIFO (named pipe) runner injector
     │   └── store.go           # Encrypted SQLite repository for vault_secrets & metadata
     │
-    ├── storage/                 # Pure Go SQLite Storage Engine
-    │   ├── db.go                # modernc.org/sqlite connection in WAL mode
-    │   ├── migrate.go           # Migration runner executing external .sql files via //go:embed
-    │   ├── ulid.go              # Monotonic ULID generator helper
+    ├── storage/                 # Relational Persistence Engine & Adapters
+    │   ├── models.go            # Status, MigrationRecord, Command/Query models
+    │   ├── ports.go             # Inbound (CommandHandler, QueryHandler) & Outbound (Engine, Transactor)
+    │   ├── commands.go          # CommandService coordinator (RunMigrations)
+    │   ├── queries.go           # QueryService coordinator (GetDatabaseStatus, GetAppliedMigrations)
+    │   ├── adapter_sqlite.go    # Pure Go SQLite adapter (WAL mode, pragmas, schema migrations)
     │   ├── schema/              # Raw .sql Schema Files (NO SQL in Go files for schema)
     │   │   ├── 001_initial.sql  # Users, user_totp_devices, totp_invites, ssh_keys, api_tokens, etc.
     │   │   ├── 002_indexes.sql  # Performance indexes
     │   │   └── 003_audit_ledger.sql # Audit ledger table, indexes, and anti-tamper triggers
-    │   ├── store_auth.go        # User, sessions, multi-device TOTP & invite queries
-    │   ├── store_tokens.go      # Multi-token PAT queries
-    │   ├── store_ssh.go         # Git deploy key & Ansible host key queries
-    │   ├── store_workers.go     # Worker nodes, health & availability queries
-    │   ├── store_leases.go      # Distributed execution leases
-    │   ├── store_runs.go        # Runs, job events, logs
-    │   ├── store_schedules.go   # Schedules queries
-    │   ├── store_vault.go       # Encrypted secrets & vault metadata queries
-    │   └── store_inventory.go   # Inventory, vars & NetBox index cache
+    │   └── storage_test.go      # Adapter, transaction, and trigger integration tests
     │
     ├── metrics/                 # Prometheus Observability Feature
     │   ├── recorder.go          # Prometheus counters, histograms & gauges
@@ -2671,30 +2669,35 @@ operator CLI and an embedded Web management console.
 * Wire `crucibled systemd unit` generating hardened systemd service unit with
   `CAP_NET_BIND_SERVICE` ambient capability and directory isolation directives.
 
-#### Milestone 1-04: Pure Go SQLite Engine & Monotonic ULIDs [DONE]
-* Pinned pure Go SQLite driver (`modernc.org/sqlite v1.34.5`) in WAL mode with
-  `PRAGMA foreign_keys=ON;` and `PRAGMA busy_timeout=5000;`
-  (`internal/storage/`).
-* Implement monotonic ULID generator (`internal/storage/ulid.go`) with domain
-  prefixes (`run_`, `tok_`, `dev_`, `sec_`, `aud_`, `sch_`, `wrk_`, etc.).
+#### Milestone 1-04: Domain Entity ULIDs & Hexagonal Storage Engine [DONE]
+* Implement domain entity monotonic ULID generator (`internal/id/`) with
+  standard category prefixes (`run_`, `tok_`, `dev_`, `sec_`, `aud_`, `sch_`,
+  `wrk_`, etc.) completely isolated from persistence logic.
+* Implement hexagonal persistence subsystem in `internal/storage/`:
+  * Outbound `Engine` and `Transactor` ports for database driver independence
+    (supporting pure Go SQLite today, and PostgreSQL / MySQL in future phases).
+  * Inbound `CommandHandler` (`RunMigrations`) and `QueryHandler`
+    (`GetDatabaseStatus`, `GetAppliedMigrations`) CQRS services.
+  * Pure Go SQLite adapter (`internal/storage/adapter_sqlite.go`) utilizing
+    `modernc.org/sqlite` in WAL mode with foreign key enforcement.
 * Author raw external SQL migrations:
   * `001_initial.sql`: 18 core relational tables with monotonic ULIDs.
   * `002_indexes.sql`: 14 composite covering indexes.
   * `003_audit_ledger.sql`: Append-only hash-chained ledger with anti-tamper
     SQLite triggers.
-* Implement embedded migration runner (`internal/storage/migrate.go`) via
-  `//go:embed schema/*.sql`.
+* Implement embedded migration runner via Go `//go:embed schema/*.sql`.
 
-#### Milestone 1-05: Database Lifecycle CLI Wiring (`crucibled db`)
-* Wire `storage.Engine` into `cmd/crucibled/db.go`.
+#### Milestone 1-05: Database Lifecycle CLI Wiring (`crucibled db`) [DONE]
+* Wire `storage.Engine`, `CommandHandler`, and `QueryHandler` into
+  `cmd/crucibled/db.go`.
 * Implement `crucibled db migrate [--config <file>]`:
-  * Probes or accepts configuration, creates database directory (`0700`),
-    opens SQLite database, runs pending migrations, and renders a Lip Gloss
-    table of applied migration versions.
+  * Probes configuration, opens database engine adapter, runs pending
+    migrations via `CommandService`, and renders a Lip Gloss table of applied
+    migration versions.
 * Implement `crucibled db status [--config <file>]`:
-  * Inspects target SQLite database, checks integrity (`PRAGMA
-    integrity_check`), verifies WAL journal mode, queries schema version,
-    and displays database file size and table counts.
+  * Queries database operational status via `QueryService`, checks integrity
+    (`PRAGMA integrity_check`), verifies WAL journal mode, queries schema
+    version, and displays database file size and table counts.
 * **Verification**: Run `crucibled db migrate` against `./var/crucible.db` and
   inspect with `sqlite3`.
 

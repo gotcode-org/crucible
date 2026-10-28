@@ -124,6 +124,7 @@ self-contained, flat feature package located directly within `internal/`:
 │ │  internal/notify/    internal/auth/      internal/tokens/               │ │
 │ │  internal/ssh/       internal/tls/       internal/schedule/             │ │
 │ │  internal/storage/   internal/metrics/   internal/events/               │ │
+│ │  internal/id/        internal/version/   internal/config/               │ │
 │ └─────────────────────────────────────────────────────────────────────────┘ │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -407,10 +408,25 @@ To enable safe hosting across internal teams and external viewers:
 
 ---
 
-## 9. Pure Go Storage Engine & Monotonic ULID Standard
+## 9. Hexagonal Storage Engine & Monotonic ULID Identity
 
-Crucible relies entirely on pure Go SQLite via `modernc.org/sqlite` with
-`CGO_ENABLED=0`.
+Crucible maintains a strict separation between domain identity (`internal/id`)
+and persistence adapters (`internal/storage`):
+
+1. **Domain Entity Identity (`internal/id`):**
+   Generates concurrency-safe, monotonic 26-character ULIDs with domain prefixes
+   (`run_`, `tok_`, `dev_`, `aud_`, `sec_`, etc.). Entity identity is minted
+   in the domain layer, keeping domain packages completely decoupled from
+   database drivers.
+
+2. **Hexagonal Persistence Subsystem (`internal/storage`):**
+   - **Outbound `Engine` Port:** Provides a database-agnostic interface (`Ping`,
+     `Migrate`, `Status`, `AppliedMigrations`, `WithinTransaction`, `Close`).
+   - **Inbound CQRS Ports:** `CommandHandler` (`RunMigrations`) and
+     `QueryHandler` (`GetDatabaseStatus`, `GetAppliedMigrations`).
+   - **Driven Adapters:** `adapter_sqlite.go` (pure Go SQLite via
+     `modernc.org/sqlite` with `CGO_ENABLED=0` in WAL mode), with architecture
+     ready for future `adapter_postgres.go` and `adapter_mysql.go` backends.
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐

@@ -2,9 +2,9 @@
 // Copyright (c) 2026 The GotCode Collective
 // See the LICENSE file in the project root for full license details.
 
-// Package storage provides pure Go SQLite persistence in WAL mode, external
-// raw SQL schema migration execution, and monotonic ULID generation.
-package storage
+// Package id provides concurrency-safe monotonic ULID generation with
+// domain-specific entity prefixes.
+package id
 
 import (
 	"crypto/rand"
@@ -33,36 +33,36 @@ const (
 	PrefixNetbox   = "nbc_"
 )
 
-// ULIDGenerator generates strictly monotonic, concurrency-safe ULID strings.
-type ULIDGenerator struct {
+// Generator generates strictly monotonic, concurrency-safe ULID strings.
+type Generator struct {
 	mu      sync.Mutex
 	entropy io.Reader
 }
 
 var (
 	defaultGenOnce sync.Once
-	defaultGen     *ULIDGenerator
+	defaultGen     *Generator
 )
 
 // DefaultGenerator returns the package singleton monotonic ULID generator.
-func DefaultGenerator() *ULIDGenerator {
+func DefaultGenerator() *Generator {
 	defaultGenOnce.Do(func() {
-		defaultGen = NewULIDGenerator(rand.Reader)
+		defaultGen = NewGenerator(rand.Reader)
 	})
 	return defaultGen
 }
 
-// NewULIDGenerator constructs a generator using crypto entropy and
-// monotonic pool.
-func NewULIDGenerator(reader io.Reader) *ULIDGenerator {
-	return &ULIDGenerator{
+// NewGenerator constructs a generator using cryptographic entropy and
+// a monotonic reader.
+func NewGenerator(reader io.Reader) *Generator {
+	return &Generator{
 		entropy: ulid.Monotonic(reader, 0),
 	}
 }
 
-// NewID creates a 26-character time-ordered ULID with an optional category
+// New creates a 26-character time-ordered ULID with an optional category
 // prefix.
-func (g *ULIDGenerator) NewID(prefix string) (string, error) {
+func (g *Generator) New(prefix string) (string, error) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
@@ -75,10 +75,10 @@ func (g *ULIDGenerator) NewID(prefix string) (string, error) {
 	return prefix + u.String(), nil
 }
 
-// MustNewID creates a prefixed ULID, panicking only on cryptographic
+// MustNew creates a prefixed ULID, panicking only on cryptographic
 // entropy failure.
-func (g *ULIDGenerator) MustNewID(prefix string) string {
-	id, err := g.NewID(prefix)
+func (g *Generator) MustNew(prefix string) string {
+	id, err := g.New(prefix)
 	if err != nil {
 		panic(err)
 	}
@@ -89,71 +89,71 @@ func (g *ULIDGenerator) MustNewID(prefix string) string {
 
 // NewRunID generates a monotonic identifier for execution runs (run_01JBC...).
 func NewRunID() string {
-	return DefaultGenerator().MustNewID(PrefixRun)
+	return DefaultGenerator().MustNew(PrefixRun)
 }
 
 // NewTokenID generates a monotonic identifier for API tokens (tok_01JBC...).
 func NewTokenID() string {
-	return DefaultGenerator().MustNewID(PrefixToken)
+	return DefaultGenerator().MustNew(PrefixToken)
 }
 
 // NewDeviceID generates an identifier for registered 2FA TOTP devices
 // (dev_01JBC...).
 func NewDeviceID() string {
-	return DefaultGenerator().MustNewID(PrefixDevice)
+	return DefaultGenerator().MustNew(PrefixDevice)
 }
 
 // NewInviteID generates an identifier for one-time TOTP invites
 // (inv_01JBC...).
 func NewInviteID() string {
-	return DefaultGenerator().MustNewID(PrefixInvite)
+	return DefaultGenerator().MustNew(PrefixInvite)
 }
 
 // NewSecretID generates an identifier for encrypted vault secrets
 // (sec_01JBC...).
 func NewSecretID() string {
-	return DefaultGenerator().MustNewID(PrefixSecret)
+	return DefaultGenerator().MustNew(PrefixSecret)
 }
 
 // NewSessionID generates an identifier for authenticated web sessions
 // (ses_01JBC...).
 func NewSessionID() string {
-	return DefaultGenerator().MustNewID(PrefixSession)
+	return DefaultGenerator().MustNew(PrefixSession)
 }
 
 // NewAuditID generates an identifier for immutable audit ledger entries
 // (aud_01JBC...).
 func NewAuditID() string {
-	return DefaultGenerator().MustNewID(PrefixAudit)
+	return DefaultGenerator().MustNew(PrefixAudit)
 }
 
 // NewScheduleID generates an identifier for recurring schedules
 // (sch_01JBC...).
 func NewScheduleID() string {
-	return DefaultGenerator().MustNewID(PrefixSchedule)
+	return DefaultGenerator().MustNew(PrefixSchedule)
 }
 
 // NewSSHKeyID generates an identifier for managed deploy/host keys
 // (ssh_01JBC...).
 func NewSSHKeyID() string {
-	return DefaultGenerator().MustNewID(PrefixSSHKey)
+	return DefaultGenerator().MustNew(PrefixSSHKey)
 }
 
 // NewWorkerID generates an identifier for cluster worker nodes
 // (wrk_01JBC...).
 func NewWorkerID() string {
-	return DefaultGenerator().MustNewID(PrefixWorker)
+	return DefaultGenerator().MustNew(PrefixWorker)
 }
 
 // NewNetboxCacheID generates an identifier for cached topology snapshots
 // (nbc_01JBC...).
 func NewNetboxCacheID() string {
-	return DefaultGenerator().MustNewID(PrefixNetbox)
+	return DefaultGenerator().MustNew(PrefixNetbox)
 }
 
-// IsValidULID checks if the given string represents a valid prefixed or raw
+// IsValid checks if the given string represents a valid prefixed or raw
 // ULID.
-func IsValidULID(rawID string, expectedPrefix string) bool {
+func IsValid(rawID string, expectedPrefix string) bool {
 	if expectedPrefix != "" && !strings.HasPrefix(rawID, expectedPrefix) {
 		return false
 	}
@@ -171,7 +171,7 @@ func IsValidULID(rawID string, expectedPrefix string) bool {
 // ULID.
 func ParseTimestamp(rawID string, prefix string) (time.Time, error) {
 	if prefix != "" && !strings.HasPrefix(rawID, prefix) {
-		return time.Time{}, errors.New("raw ID does not contain expected prefix")
+		return time.Time{}, errors.New("raw ID does not match expected prefix")
 	}
 
 	ulidPart := strings.TrimPrefix(rawID, prefix)
