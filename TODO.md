@@ -10,7 +10,8 @@ Format: `[state] (Priority) [domain/binary] Task description @assignee +tag`
 | [domain]       | Target domain (storage, secrets, reports, cluster, etc).   |
 | @name          | Context / Assignee (e.g., @jovens@gotcode.org).            |
 | +tag           | Project or state tag (e.g., +phase1, +security).           |
-===============================================================================
+
+---
 
 ## Phase 1: Project Scaffolding, Schemas & Models
 - [x] (A) [shared] Initialize go.mod module gotcode.org/crucible Go 1.24+
