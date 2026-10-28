@@ -1,0 +1,242 @@
+{{ define "content" }}
+<!-- 4-Column Telemetry Strip -->
+<section class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+  <!-- Card 1: Engine Status -->
+  <div class="bg-zinc-900/40 border border-zinc-800/80 rounded-xl p-4 flex flex-col justify-between">
+    <div class="flex items-center justify-between">
+      <span class="text-[11px] font-mono uppercase tracking-wider text-zinc-400">Engine Status</span>
+      <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+    </div>
+    <div class="mt-3 flex items-baseline justify-between">
+      <span class="text-3xl font-extrabold font-mono text-emerald-400">ONLINE</span>
+      <span class="text-[11px] font-mono text-zinc-400">{{ .DaemonMode | upper }}</span>
+    </div>
+  </div>
+
+  <!-- Card 2: Persistence Engine -->
+  <div class="bg-zinc-900/40 border border-zinc-800/80 rounded-xl p-4 flex flex-col justify-between">
+    <div class="flex items-center justify-between">
+      <span class="text-[11px] font-mono uppercase tracking-wider text-zinc-400">Storage Engine</span>
+      <span class="text-[10px] font-mono text-emerald-400">WAL ACTIVE</span>
+    </div>
+    <div class="mt-3 flex items-baseline justify-between">
+      <span class="text-3xl font-extrabold font-mono text-white">{{ .Storage.Driver | upper }}</span>
+      <span class="text-[11px] font-mono text-zinc-400">v{{ .Storage.LatestVersion }} SCHEMA</span>
+    </div>
+  </div>
+
+  <!-- Card 3: Listeners & Ports -->
+  <div class="bg-zinc-900/40 border border-zinc-800/80 rounded-xl p-4 flex flex-col justify-between">
+    <div class="flex items-center justify-between">
+      <span class="text-[11px] font-mono uppercase tracking-wider text-zinc-400">Dual Endpoints</span>
+      <span class="text-[10px] font-mono text-cyan-400">READY</span>
+    </div>
+    <div class="mt-3 flex items-baseline justify-between">
+      <span class="text-3xl font-extrabold font-mono text-cyan-400">:{{ .HTTPPort }}</span>
+      <span class="text-[11px] font-mono text-zinc-400">TCP + UNIX</span>
+    </div>
+  </div>
+
+  <!-- Card 4: Uptime -->
+  <div class="bg-zinc-900/40 border border-zinc-800/80 rounded-xl p-4 flex flex-col justify-between">
+    <div class="flex items-center justify-between">
+      <span class="text-[11px] font-mono uppercase tracking-wider text-zinc-400">Daemon Uptime</span>
+      <span class="text-[10px] font-mono text-emerald-400">HEALTHY</span>
+    </div>
+    <div class="mt-3 flex items-baseline justify-between">
+      <span class="text-3xl font-extrabold font-mono text-white">{{ .Uptime }}</span>
+      <span class="text-[11px] font-mono text-zinc-500">SYSTEM</span>
+    </div>
+  </div>
+</section>
+
+<!-- Split Command Layout: Left Storage & Migrations (8 cols) + Right IPC & Health Dock (4 cols) -->
+<div class="grid grid-cols-1 xl:grid-cols-12 gap-6 items-start">
+
+  <!-- Left 8 Columns: Storage Diagnostics & Applied Migrations -->
+  <div class="xl:col-span-8 space-y-6">
+
+    <!-- Database Diagnostics Panel -->
+    <section class="bg-zinc-900/30 border border-zinc-800/80 rounded-xl overflow-hidden">
+      <div class="p-4 border-b border-zinc-800/80 flex items-center justify-between bg-zinc-900/50">
+        <div class="flex items-center gap-2.5">
+          <span class="text-xs font-mono font-bold uppercase tracking-wider text-zinc-200">Database Diagnostics</span>
+          <span class="px-2 py-0.5 rounded text-[10px] font-mono bg-emerald-500/10 text-emerald-400 border border-emerald-500/30">
+            INTEGRITY: {{ if .Storage.IntegrityOK }}OK{{ else }}FAILED{{ end }}
+          </span>
+        </div>
+        <span class="text-[11px] font-mono text-zinc-500">{{ .Storage.TablesCount }} tables discovered</span>
+      </div>
+
+      <div class="p-4 grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4 text-xs font-mono">
+        <div class="bg-zinc-950/60 p-3 rounded-lg border border-zinc-800/50">
+          <div class="text-[10px] uppercase text-zinc-500 tracking-wider">Database Path</div>
+          <div class="text-zinc-200 mt-1 truncate" title="{{ .Storage.DatabasePath }}">{{ .Storage.DatabasePath }}</div>
+        </div>
+
+        <div class="bg-zinc-950/60 p-3 rounded-lg border border-zinc-800/50">
+          <div class="text-[10px] uppercase text-zinc-500 tracking-wider">Journal & Locking</div>
+          <div class="text-zinc-200 mt-1 flex items-center gap-2">
+            <span>{{ .Storage.JournalMode | upper }}</span>
+            <span class="text-zinc-600">·</span>
+            <span class="text-zinc-400">{{ .Storage.BusyTimeoutMs }}ms timeout</span>
+          </div>
+        </div>
+
+        <div class="bg-zinc-950/60 p-3 rounded-lg border border-zinc-800/50">
+          <div class="text-[10px] uppercase text-zinc-500 tracking-wider">Foreign Key Checks</div>
+          <div class="mt-1">
+            {{ if .Storage.ForeignKeysOn }}
+              <span class="text-emerald-400">ENABLED</span>
+            {{ else }}
+              <span class="text-rose-400">DISABLED</span>
+            {{ end }}
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Schema Migrations Table -->
+    <section class="bg-zinc-900/30 border border-zinc-800/80 rounded-xl overflow-hidden">
+      <div class="p-4 border-b border-zinc-800/80 flex items-center justify-between bg-zinc-900/50">
+        <div class="flex items-center gap-2.5">
+          <span class="text-xs font-mono font-bold uppercase tracking-wider text-zinc-200">Applied Schema Migrations</span>
+          <span class="px-2 py-0.5 rounded text-[10px] font-mono bg-cyan-500/10 text-cyan-400 border border-cyan-500/30">
+            TOTAL: {{ len .Migrations }}
+          </span>
+        </div>
+        <span class="text-[11px] font-mono text-zinc-500">Go embed / migrations</span>
+      </div>
+
+      <div class="overflow-x-auto">
+        <table class="w-full border-collapse text-xs text-left">
+          <thead>
+            <tr class="bg-zinc-950/60 border-b border-zinc-800/80 text-zinc-500 font-mono uppercase">
+              <th class="px-4 py-3">Version</th>
+              <th class="px-4 py-3">Migration Script</th>
+              <th class="px-4 py-3">Applied At (UTC)</th>
+              <th class="px-4 py-3 text-right">Status</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-zinc-800/50 font-mono">
+            {{ range .Migrations }}
+            <tr class="hover:bg-zinc-800/30 transition-colors">
+              <td class="px-4 py-3 text-emerald-400 font-bold">
+                {{ printf "%03d" .Version }}
+              </td>
+              <td class="px-4 py-3 text-zinc-200 font-medium">
+                {{ .Name }}
+              </td>
+              <td class="px-4 py-3 text-zinc-400">
+                {{ .AppliedAt | formatTime }}
+              </td>
+              <td class="px-4 py-3 text-right">
+                <span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-[10px] bg-emerald-500/10 text-emerald-400 border border-emerald-500/30">
+                  <span class="w-1 h-1 rounded-full bg-emerald-400"></span>
+                  COMMITTED
+                </span>
+              </td>
+            </tr>
+            {{ else }}
+            <tr>
+              <td colspan="4" class="px-4 py-8 text-center text-zinc-500">
+                No migrations applied yet. Run <code class="text-emerald-400">crucibled db migrate</code> to initialize database schema.
+              </td>
+            </tr>
+            {{ end }}
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+  </div>
+
+  <!-- Right 4 Columns: UNIX Domain Socket & Telemetry Dock -->
+  <div class="xl:col-span-4 space-y-6">
+
+    <!-- UNIX Domain Socket Dock -->
+    <section class="bg-zinc-900/30 border border-zinc-800/80 rounded-xl overflow-hidden">
+      <div class="p-4 border-b border-zinc-800/80 flex items-center justify-between bg-zinc-900/50">
+        <span class="text-xs font-mono font-bold uppercase tracking-wider text-zinc-200">UNIX Domain Socket</span>
+        <span class="text-[10px] font-mono px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/30">MODE 0660</span>
+      </div>
+
+      <div class="p-4 space-y-3 font-mono text-xs">
+        <div class="bg-zinc-950/70 p-3 rounded-lg border border-zinc-800/80">
+          <div class="text-[10px] uppercase text-zinc-500 tracking-wider">Socket Path</div>
+          <div class="text-zinc-200 mt-1 break-all select-all font-semibold">{{ .SocketPath }}</div>
+        </div>
+
+        <div class="text-[11px] text-zinc-400">
+          Operators can connect with the <code class="text-emerald-400">crucibled</code> daemon locally without TCP network exposure:
+        </div>
+
+        <div class="bg-zinc-950 p-2.5 rounded-lg border border-zinc-800/80 text-[11px] text-zinc-300 break-all select-all">
+          curl --unix-socket {{ .SocketPath }} http://localhost/healthz
+        </div>
+      </div>
+    </section>
+
+    <!-- Operational Health & API Dock -->
+    <section class="bg-zinc-900/30 border border-zinc-800/80 rounded-xl overflow-hidden">
+      <div class="p-4 border-b border-zinc-800/80 flex items-center justify-between bg-zinc-900/50">
+        <span class="text-xs font-mono font-bold uppercase tracking-wider text-zinc-200">Daemon Endpoints</span>
+        <span class="text-[10px] font-mono text-cyan-400">LIVE</span>
+      </div>
+
+      <div class="divide-y divide-zinc-800/60 font-mono text-xs">
+        <div class="p-4 flex items-center justify-between">
+          <div>
+            <div class="text-zinc-200 font-semibold">GET /healthz</div>
+            <div class="text-[11px] text-zinc-500">JSON liveness & readiness check</div>
+          </div>
+          <a href="/healthz" target="_blank" class="px-2.5 py-1 rounded text-[11px] bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 hover:bg-emerald-500/20 transition-all">
+            TEST &rarr;
+          </a>
+        </div>
+
+        <div class="p-4 flex items-center justify-between">
+          <div>
+            <div class="text-zinc-200 font-semibold">GET /</div>
+            <div class="text-[11px] text-zinc-500">Embedded Web Shell Dashboard</div>
+          </div>
+          <span class="px-2 py-0.5 rounded text-[10px] bg-zinc-800 text-zinc-400">HTML</span>
+        </div>
+
+        <div class="p-4 flex items-center justify-between">
+          <div>
+            <div class="text-zinc-200 font-semibold">GET /static/*</div>
+            <div class="text-[11px] text-zinc-500">Embedded CSS & assets</div>
+          </div>
+          <span class="px-2 py-0.5 rounded text-[10px] bg-zinc-800 text-zinc-400">STATIC</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- Architecture Roadmap -->
+    <section class="bg-zinc-900/30 border border-zinc-800/80 rounded-xl p-4 font-mono text-xs space-y-2">
+      <div class="text-[10px] uppercase text-zinc-500 tracking-wider">Next Milestones</div>
+      <div class="space-y-1.5 text-[11px]">
+        <div class="flex items-center gap-2 text-zinc-400">
+          <span class="text-emerald-400 font-bold">✓</span>
+          <span>1-06: Standalone Server & Web Shell</span>
+        </div>
+        <div class="flex items-center gap-2 text-zinc-500">
+          <span>○</span>
+          <span>1-07: Cron Scheduling Engine</span>
+        </div>
+        <div class="flex items-center gap-2 text-zinc-500">
+          <span>○</span>
+          <span>1-08: Job Runner Engine (Ansible)</span>
+        </div>
+        <div class="flex items-center gap-2 text-zinc-500">
+          <span>○</span>
+          <span>1-09: Cluster Mesh & Raft Heartbeats</span>
+        </div>
+      </div>
+    </section>
+
+  </div>
+
+</div>
+{{ end }}

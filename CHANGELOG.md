@@ -33,6 +33,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   - Terminal UI Subsystem ([`internal/ui/`](./internal/ui/)) with Charm Lip
     Gloss styling, adaptive colors, status badges, ASCII banner, formatted
     tables, and Cobra help/usage formatters.
+  - Standalone Server & IPC Listener Subsystem
+    ([`internal/server/`](./internal/server/)) implementing dual TCP listener
+    and UNIX domain socket bindings (`0660` mode with automatic cleanup),
+    JSON `/healthz` liveness/readiness verification, and graceful shutdown
+    context draining.
+  - Embedded Web Shell Subsystem ([`web/`](./web/)) utilizing Go `//go:embed`
+    to package HTML5 templates, Tailwind CSS styles, JetBrains Mono font
+    stacks, custom scrollbars, and client scripts into the binary.
 - **Database Schemas & Migrations**:
   - `001_initial.sql`: Initial relational schema defining 18 core tables
     with monotonic ULID primary keys and foreign key constraints.
@@ -42,6 +50,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     ledger protected by SQLite `BEFORE UPDATE` and `BEFORE DELETE` anti-tamper
     triggers.
 - **Commands**:
+  - Added `start` daemon subcommand to `crucibled`
+    ([`cmd/crucibled/start.go`](./cmd/crucibled/start.go)) for launching the
+    standalone server daemon with auto-migration, status telemetry banners,
+    and SIGINT/SIGTERM graceful shutdown handling.
   - Added `db migrate` and `db status` subcommands to `crucibled`
     ([`cmd/crucibled/db.go`](./cmd/crucibled/db.go)) for applying embedded
     schema migrations, displaying migration records, and inspecting database

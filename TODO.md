@@ -70,12 +70,12 @@ Format: `[state] (Priority) [domain/binary] Task description @assignee +tag`
 - [x] (B) [crucibled] Implement crucibled db status command with integrity
       check, WAL mode, and table counts @jovens@gotcode.org +phase1 +storage
       +cli
-- [ ] (A) [crucibled] Implement crucibled start standalone HTTP daemon with
+- [x] (A) [crucibled] Implement crucibled start standalone HTTP daemon with
       UNIX socket, /healthz, and graceful shutdown @jovens@gotcode.org +phase1
       +daemon
-- [ ] (B) [web] Embed web/templates/ and web/static/ assets into daemon binary
+- [x] (B) [web] Embed web/templates/ and web/static/ assets into daemon binary
       via Go //go:embed @jovens@gotcode.org +phase1 +web
-- [ ] (B) [web] Implement base HTML5 layout, CSS stylesheets, navigation bar,
+- [x] (B) [web] Implement base HTML5 layout, CSS stylesheets, navigation bar,
       and dark mode styling @jovens@gotcode.org +phase1 +web
 - [ ] (B) [auth] Implement Linux PAM authentication adapter for system accounts
       in internal/auth @jovens@gotcode.org +phase1 +auth +security

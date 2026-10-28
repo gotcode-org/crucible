@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="en" class="h-full dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>{{ .Title }} — Crucible Ops</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/static/css/style.css" />
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ['"Plus Jakarta Sans"', 'sans-serif'],
+            mono: ['"JetBrains Mono"', 'monospace'],
+          },
+        },
+      },
+    }
+  </script>
+</head>
+<body class="bg-zinc-950 text-zinc-100 h-full flex overflow-hidden antialiased selection:bg-emerald-500/30 selection:text-emerald-200">
+
+  <!-- Left Command Sidebar -->
+  <aside class="w-64 bg-zinc-900/50 border-r border-zinc-800/80 flex flex-col justify-between shrink-0 select-none">
+    <!-- Brand + Primary Navigation -->
+    <div class="p-4 space-y-6">
+      <a href="/" class="flex items-center justify-between px-2 py-1.5">
+        <div class="flex items-center gap-2.5">
+          <div class="w-8 h-8 rounded-lg bg-emerald-500/10 border border-emerald-500/40 flex items-center justify-center text-emerald-400 font-mono font-bold text-sm">
+            &gt;_
+          </div>
+          <div>
+            <div class="font-bold tracking-tight text-white text-sm leading-none">CRUCIBLE</div>
+            <div class="font-mono text-[10px] text-emerald-400 mt-0.5">RUNNER ENGINE</div>
+          </div>
+        </div>
+        <span class="text-[10px] font-mono bg-zinc-800 text-zinc-400 px-1.5 py-0.5 rounded border border-zinc-700/70">{{ .Version }}</span>
+      </a>
+
+      <!-- Navigation Links -->
+      <div class="space-y-1">
+        <div class="px-2 pb-1 text-[10px] font-mono uppercase tracking-widest text-zinc-500">Operations</div>
+        <a href="/" class="flex items-center justify-between px-3 py-2 rounded-lg text-xs font-semibold {{ if eq .ActiveNav "overview" }}bg-emerald-500/10 text-emerald-400 border border-emerald-500/25{{ else }}text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800/50 transition-colors{{ end }}">
+          <span class="flex items-center gap-2.5">
+            <span class="font-mono">01</span>
+            <span>Command Overview</span>
+          </span>
+          {{ if eq .ActiveNav "overview" }}<span class="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>{{ end }}
+        </a>
+        <a href="#schedules" class="flex items-center justify-between px-3 py-2 rounded-lg text-xs font-medium text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800/50 transition-colors">
+          <span class="flex items-center gap-2.5">
+            <span class="font-mono text-zinc-600">02</span>
+            <span>Cron Schedules</span>
+          </span>
+          <span class="text-[10px] font-mono px-1 py-0.5 rounded bg-zinc-800 text-zinc-500">v0.1</span>
+        </a>
+        <a href="#runs" class="flex items-center justify-between px-3 py-2 rounded-lg text-xs font-medium text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800/50 transition-colors">
+          <span class="flex items-center gap-2.5">
+            <span class="font-mono text-zinc-600">03</span>
+            <span>Active Inspector</span>
+          </span>
+          <span class="text-[10px] font-mono px-1.5 py-0.2 rounded bg-cyan-500/10 text-cyan-400 border border-cyan-500/20">LIVE</span>
+        </a>
+        <a href="#jobs" class="flex items-center justify-between px-3 py-2 rounded-lg text-xs font-medium text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800/50 transition-colors">
+          <span class="flex items-center gap-2.5">
+            <span class="font-mono text-zinc-600">04</span>
+            <span>Job Builder</span>
+          </span>
+        </a>
+        <a href="#clusters" class="flex items-center justify-between px-3 py-2 rounded-lg text-xs font-medium text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800/50 transition-colors">
+          <span class="flex items-center gap-2.5">
+            <span class="font-mono text-zinc-600">05</span>
+            <span>Cluster Mesh</span>
+          </span>
+        </a>
+        <a href="#inventory" class="flex items-center justify-between px-3 py-2 rounded-lg text-xs font-medium text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800/50 transition-colors">
+          <span class="flex items-center gap-2.5">
+            <span class="font-mono text-zinc-600">06</span>
+            <span>Ansible Inventory</span>
+          </span>
+        </a>
+        <a href="#vars" class="flex items-center justify-between px-3 py-2 rounded-lg text-xs font-medium text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800/50 transition-colors">
+          <span class="flex items-center gap-2.5">
+            <span class="font-mono text-zinc-600">07</span>
+            <span>Ansible Vars</span>
+          </span>
+        </a>
+      </div>
+
+      <!-- Runtime Diagnostics Widget -->
+      <div class="pt-4 border-t border-zinc-800/80 space-y-2.5">
+        <div class="px-2 flex items-center justify-between text-[10px] font-mono uppercase tracking-widest text-zinc-500">
+          <span>Engine Status</span>
+          <span class="text-emerald-400">ONLINE</span>
+        </div>
+        <div class="bg-zinc-950/70 border border-zinc-800/80 rounded-lg p-3 space-y-2 font-mono text-[11px]">
+          <div class="flex items-center justify-between">
+            <span class="text-zinc-400">Database</span>
+            <span class="text-emerald-400">● {{ .Storage.Driver | upper }}</span>
+          </div>
+          <div class="flex items-center justify-between">
+            <span class="text-zinc-400">Schema</span>
+            <span class="text-zinc-300">v{{ .Storage.LatestVersion }} ({{ .Storage.MigrationCount }} applied)</span>
+          </div>
+          <div class="flex items-center justify-between">
+            <span class="text-zinc-400">Mode</span>
+            <span class="text-cyan-400">{{ .DaemonMode | upper }}</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Bottom Operator Profile -->
+    <div class="p-4 border-t border-zinc-800/80 bg-zinc-950/40">
+      <div class="flex items-center justify-between">
+        <div class="min-w-0">
+          <div class="text-xs font-semibold text-zinc-200 truncate">{{ .OperatorUser }}</div>
+          <div class="text-[10px] font-mono text-emerald-400 flex items-center gap-1 mt-0.5">
+            <span>●</span> {{ .AuthState }}
+          </div>
+        </div>
+        <span class="px-2 py-1 rounded text-[10px] font-mono text-zinc-400 bg-zinc-800/60 border border-zinc-700/50">
+          LOCAL
+        </span>
+      </div>
+    </div>
+  </aside>
+
+  <!-- Main Workspace Column -->
+  <div class="flex-1 flex flex-col min-w-0 overflow-hidden">
+
+    <!-- Compact Top Status Header -->
+    <header class="h-14 bg-zinc-900/30 border-b border-zinc-800/80 px-6 flex items-center justify-between shrink-0">
+      <div class="flex items-center gap-3 text-xs font-mono">
+        <span class="text-zinc-500">CRUCIBLE</span>
+        <span class="text-zinc-700">/</span>
+        <span class="text-zinc-200 font-semibold">{{ .Breadcrumb | upper }}</span>
+      </div>
+
+      <div class="flex items-center gap-3">
+        <div class="hidden sm:flex items-center gap-2 px-2.5 py-1 rounded-md bg-zinc-900 border border-zinc-800 text-[11px] font-mono text-zinc-400">
+          <span class="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+          <span>HTTP: {{ .HTTPBind }}:{{ .HTTPPort }}</span>
+        </div>
+        <a href="/healthz" target="_blank" class="px-2.5 py-1 rounded-md text-xs font-mono text-emerald-400 bg-emerald-500/10 border border-emerald-500/30 hover:bg-emerald-500/20 transition-all">
+          GET /healthz
+        </a>
+      </div>
+    </header>
+
+    <!-- Scrollable Command Center Content -->
+    <main class="flex-1 overflow-y-auto p-6 space-y-6">
+      {{ template "content" . }}
+    </main>
+
+  </div>
+
+  <script src="/static/js/app.js"></script>
+</body>
+</html>

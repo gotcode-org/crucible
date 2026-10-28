@@ -16,6 +16,9 @@ LDFLAGS := -s -w \
 	-X "gotcode.org/crucible/internal/version.gitBranch=$(GIT_BRANCH)" \
 	-X "gotcode.org/crucible/internal/version.buildDate=$(BUILD_DATE)"
 
+# Toolchain overrides
+VULN_TOOLCHAIN ?= go1.26.10
+
 .PHONY: all build check lint sec vuln test clean tidy
 
 all: tidy lint sec vuln test build
@@ -38,7 +41,8 @@ sec:
 
 vuln:
 	@echo "==> Running govulncheck vulnerability scanner..."
-	go run golang.org/x/vuln/cmd/govulncheck@v1.1.4 ./...
+	GOTOOLCHAIN=$(VULN_TOOLCHAIN) \
+		go run golang.org/x/vuln/cmd/govulncheck@v1.1.4 ./...
 
 test:
 	@echo "==> Running tests with race detection..."
