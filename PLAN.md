@@ -1859,6 +1859,8 @@ crucible/
 │   │   ├── main_test.go         # Daemon CLI entrypoint and flag parsing tests
 │   │   ├── root.go              # Root server Cobra command
 │   │   ├── version.go           # `crucibled version` Cobra command
+│   │   ├── config.go            # `crucibled config [init|validate]` Cobra commands
+│   │   ├── systemd.go           # `crucibled systemd unit` Cobra command
 │   │   ├── server_grpc.go       # gRPC server (Token Auth interceptor, JobService, TokenService, etc.)
 │   │   ├── server_http.go       # HTTP/SSE Web UI router, /metrics scraper & reverse proxy
 │   │   ├── peer_manager.go      # Outbound P2P mesh connection manager & commit broadcaster
@@ -1900,6 +1902,7 @@ crucible/
 │       ├── main_test.go         # CLI entrypoint, flag parsing, and buffer injection tests
 │       ├── root.go              # Root Cobra command & global flags (--server, --token)
 │       ├── version.go           # `cruciblectl version` Cobra command
+│       ├── config.go            # `cruciblectl config [init|validate]` Cobra commands
 │       ├── auth.go              # `cruciblectl auth login` & `cruciblectl auth 2fa [invite|devices|revoke]`
 │       ├── token.go             # `cruciblectl token [create|list|revoke]` (Multiple PAT tokens)
 │       ├── ssh.go               # `cruciblectl ssh [generate|show|import|test]` (Deploy and host keys)
@@ -1930,11 +1933,18 @@ crucible/
     │   ├── adapter_runtime.go   # Concrete adapter querying linker ldflags, runtime, and debug.BuildInfo
     │   └── version_test.go      # Table-driven unit tests isolating query logic
     │
-    ├── ui/                      # Lip Gloss Terminal UI Styling & Command Views
+    ├── ui/                      # Lip Gloss Terminal UI Styling & Views
     │   ├── styles.go            # Adaptive color palettes, bold headers, Success/Error message helpers
     │   ├── views.go             # ASCII banner logo, custom Cobra HandleUsage & HandleHelp formatters
     │   ├── version.go           # Formatted tabular version output (PrintVersion) using tabwriter
     │   └── ui_test.go           # Unit tests for message styling, usage rendering, and version output
+    │
+    ├── config/                  # Server & Client Configuration Subsystem
+    │   ├── server.go            # ServerConfig models, defaults, and env overrides
+    │   ├── client.go            # ClientConfig models, profiles, and flag bindings
+    │   ├── template.go          # Fully-commented YAML template generator
+    │   ├── systemd.go           # Hardened systemd unit (CAP_NET_BIND_SERVICE)
+    │   └── config_test.go       # Tests for 4-tier precedence (flag/env/file/default)
     │
     ├── ansible/                 # Ansible Inventory, NetBox & Variables Feature
     │   ├── models.go            # Inventory, HostVars, GroupVars, CustomVars, Group, Host
@@ -2579,8 +2589,8 @@ teams and compliance reviewers:
 1. Initialize Go module with vanity import path `gotcode.org/crucible` (Go
    1.24+).
 2. Scaffold flat feature directory structure:
-   * `internal/version/`, `internal/ui/`, `internal/logging/`,
-     `internal/audit/`, `internal/ansible/`, `internal/git/`,
+   * `internal/version/`, `internal/ui/`, `internal/config/`,
+     `internal/logging/`, `internal/audit/`, `internal/ansible/`, `internal/git/`,
      `internal/cluster/`, `internal/engine/`, `internal/auth/`,
      `internal/tokens/`, `internal/ssh/`, `internal/tls/`,
      `internal/schedule/`, `internal/storage/schema/`, `internal/metrics/`,
@@ -2648,6 +2658,21 @@ teams and compliance reviewers:
      reports).
    * Pinned tooling (`gosec@v2.22.2`, `govulncheck@v1.1.4`) to prevent
      unexpected toolchain switching on Go 1.24.
+9. Implement Configuration & Systemd Lifecycle Subsystem (`internal/config/`):
+   * Define `ServerConfig` and `ClientConfig` structures with 4-tier
+     precedence: Flags > Environment Variables (`CRUCIBLE_*`) > YAML
+     Configuration File (`crucibled.yaml`) > Defaults.
+   * Provide dev-friendly relative paths (`./var/crucible.db`, `./var/reports`)
+     and production systemd paths (`/var/lib/crucible/crucible.db`,
+     `/run/crucibled/crucible.sock`, `/etc/crucible/crucibled.yaml`).
+   * `crucibled config init [--prod]` and `crucibled config validate` Cobra
+     commands for YAML configuration lifecycle.
+   * `cruciblectl config init [--server <url>]` and `cruciblectl config
+     validate` Cobra commands with profile management.
+   * `crucibled systemd unit [--user crucible] [--port 443]` command outputting
+     hardened service unit with `CAP_NET_BIND_SERVICE` ambient capability,
+     `NoNewPrivileges=yes`, and systemd directory management (`StateDirectory`,
+     `RuntimeDirectory`, `ConfigurationDirectory`, `LogsDirectory`).
 
 ### Phase 2: Core Feature Packages Implementation
 1. **SQLite Storage Engine (`internal/storage/`):**
