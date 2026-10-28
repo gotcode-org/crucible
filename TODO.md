@@ -55,9 +55,9 @@ Format: `[state] (Priority) [domain/binary] Task description @assignee +tag`
 - [x] (B) [crucibled] Implement crucibled systemd unit generator command with
       ambient capabilities (CAP_NET_BIND_SERVICE) @jovens@gotcode.org +phase1
       +crucibled +systemd
-- [ ] (A) [storage] Author external raw SQL migration 001_initial.sql with
+- [x] (A) [storage] Author external raw SQL migration 001_initial.sql with
       monotonic ULIDs @jovens@gotcode.org +phase1 +storage
-- [ ] (A) [storage] Author external raw SQL index migration 002_indexes.sql
+- [x] (A) [storage] Author external raw SQL index migration 002_indexes.sql
       @jovens@gotcode.org +phase1 +storage
 - [ ] (B) [notify] Define Notification models and 3-tier recipient resolver
       interfaces @jovens@gotcode.org +phase1 +notify
@@ -87,7 +87,7 @@ Format: `[state] (Priority) [domain/binary] Task description @assignee +tag`
       @jovens@gotcode.org +phase1 +events
 - [ ] (A) [logging] Implement operational logging with pure Go log/slog
       streaming to stdout/stderr @jovens@gotcode.org +phase1 +logging
-- [ ] (A) [audit] Author raw SQL schema 003_audit_ledger.sql with monotonic
+- [x] (A) [audit] Author raw SQL schema 003_audit_ledger.sql with monotonic
       ULIDs, SHA-256 hash chaining, and SQLite anti-tamper triggers
       @jovens@gotcode.org +phase1 +audit +storage
 - [ ] (A) [audit] Define AuditEvent domain models, hash calculation
@@ -123,11 +123,11 @@ Format: `[state] (Priority) [domain/binary] Task description @assignee +tag`
       generator @jovens@gotcode.org +phase2 +auth +security
 - [ ] (B) [tokens] Implement SHA-256 hashed Personal Access Tokens (PATs) and
       scope validator @jovens@gotcode.org +phase2 +tokens +security
-- [ ] (A) [storage] Implement modernc.org/sqlite pure Go WAL storage layer
+- [x] (A) [storage] Implement modernc.org/sqlite pure Go WAL storage layer
       (zero Cgo) @jovens@gotcode.org +phase2 +storage
-- [ ] (A) [storage] Implement embedded go:embed SQL schema migration runner
+- [x] (A) [storage] Implement embedded go:embed SQL schema migration runner
       @jovens@gotcode.org +phase2 +storage
-- [ ] (A) [storage] Implement monotonic ULID generator and foreign key enforcer
+- [x] (A) [storage] Implement monotonic ULID generator and foreign key enforcer
       @jovens@gotcode.org +phase2 +storage
 - [ ] (A) [audit] Implement append-only cryptographic hash chain recorder
       (genesis block & previous_hash linking) in SQLite @jovens@gotcode.org

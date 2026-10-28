@@ -11,6 +11,22 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 - **Subsystems**:
+  - Hexagonal CQRS Configuration Subsystem
+    ([`internal/config/`](./internal/config/)) providing 4-tier precedence
+    resolution (flags, environment variables, YAML configuration files, and
+    embedded defaults), domain models for `ServerConfig`, `ClientConfig`,
+    `StorageConfig`, and `SystemdOptions`, and filesystem/environment adapters.
+  - Pure Go SQLite Persistence Subsystem
+    ([`internal/storage/`](./internal/storage/)) utilizing `modernc.org/sqlite`
+    in WAL mode with foreign key enforcement and busy timeout configuration.
+  - Embedded SQL Migration Runner
+    ([`internal/storage/migrate.go`](./internal/storage/migrate.go)) using Go
+    `//go:embed` for external SQL scripts, transactional migrations, and
+    schema version tracking in `schema_migrations`.
+  - Concurrency-Safe Monotonic ULID Generator
+    ([`internal/storage/ulid.go`](./internal/storage/ulid.go)) using
+    `github.com/oklog/ulid/v2` with domain entity prefixes (`run_`, `tok_`,
+    `dev_`, `inv_`, `sec_`, `ses_`, `aud_`, `sch_`, `ssh_`, `wrk_`, `nbc_`).
   - Hexagonal CQRS Version Subsystem
     ([`internal/version/`](./internal/version/)) providing runtime build
     metadata extraction, dependency introspection, and tabular/JSON
@@ -18,7 +34,22 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   - Terminal UI Subsystem ([`internal/ui/`](./internal/ui/)) with Charm Lip
     Gloss styling, adaptive colors, status badges, ASCII banner, formatted
     tables, and Cobra help/usage formatters.
+- **Database Schemas & Migrations**:
+  - `001_initial.sql`: Initial relational schema defining 18 core tables
+    with monotonic ULID primary keys and foreign key constraints.
+  - `002_indexes.sql`: 14 composite covering indexes optimizing high-frequency
+    lookups and status filtering across runs, tokens, and workers.
+  - `003_audit_ledger.sql`: Append-only SHA-256 hash-chained immutable audit
+    ledger protected by SQLite `BEFORE UPDATE` and `BEFORE DELETE` anti-tamper
+    triggers.
 - **Commands**:
+  - Added `config init` and `config validate` subcommands to `crucibled`
+    ([`cmd/crucibled/config.go`](./cmd/crucibled/config.go)) and `cruciblectl`
+    ([`cmd/cruciblectl/config.go`](./cmd/cruciblectl/config.go)), along with
+    `config use-context` for profile switching.
+  - Added `systemd unit` generator subcommand to `crucibled`
+    ([`cmd/crucibled/systemd.go`](./cmd/crucibled/systemd.go)) for producing
+    hardened systemd service units with `CAP_NET_BIND_SERVICE`.
   - Added `version` subcommand to `crucibled` daemon
     ([`cmd/crucibled/version.go`](./cmd/crucibled/version.go)) and
     `cruciblectl` CLI
