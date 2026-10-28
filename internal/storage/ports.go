@@ -15,11 +15,17 @@ type Engine interface {
 	// DB returns the underlying standard library SQL connection pool.
 	DB() *sql.DB
 
+	// Path returns the canonical filesystem path of the database.
+	Path() string
+
 	// Ping checks the health of the SQLite connection pool.
 	Ping(ctx context.Context) error
 
 	// Migrate executes external schema migrations embedded in the binary.
 	Migrate(ctx context.Context) error
+
+	// Status queries operational diagnostics and metadata for the database.
+	Status(ctx context.Context) (*Status, error)
 
 	// Close terminates the connection pool and checkpoints WAL journals.
 	Close() error

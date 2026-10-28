@@ -347,3 +347,70 @@ func TestTransactor_CommitAndRollback(t *testing.T) {
 		t.Errorf("expected user_rollback to be 0 after rollback, got %d", rollbackCount)
 	}
 }
+
+func TestDB_Status(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "status_test.db")
+
+	dbInstance, err := storage.Open(ctx, config.StorageConfig{
+		DatabasePath:  dbPath,
+		WALMode:       true,
+		BusyTimeoutMs: 5000,
+	})
+	if err != nil {
+		t.Fatalf("storage.Open() error: %v", err)
+	}
+	defer func() {
+		if closeErr := dbInstance.Close(); closeErr != nil {
+			t.Errorf("dbInstance.Close() error: %v", closeErr)
+		}
+	}()
+
+	// 1. Initial status before migrations
+	st1, err := dbInstance.Status(ctx)
+	if err != nil {
+		t.Fatalf("db.Status() before migrations error: %v", err)
+	}
+	if !st1.IntegrityOK {
+		t.Errorf("expected IntegrityOK = true, got false")
+	}
+	if st1.JournalMode != "wal" {
+		t.Errorf("expected JournalMode = 'wal', got %s", st1.JournalMode)
+	}
+	if !st1.ForeignKeysOn {
+		t.Errorf("expected ForeignKeysOn = true, got false")
+	}
+	if st1.MigrationCount != 0 {
+		t.Errorf("expected MigrationCount = 0, got %d", st1.MigrationCount)
+	}
+
+	// 2. Migrate and check updated status
+	if migErr := dbInstance.Migrate(ctx); migErr != nil {
+		t.Fatalf("db.Migrate() error: %v", migErr)
+	}
+
+	st2, err := dbInstance.Status(ctx)
+	if err != nil {
+		t.Fatalf("db.Status() after migrations error: %v", err)
+	}
+	if st2.MigrationCount != 3 {
+		t.Errorf("expected MigrationCount = 3, got %d", st2.MigrationCount)
+	}
+	if st2.LatestVersion != 3 {
+		t.Errorf("expected LatestVersion = 3, got %d", st2.LatestVersion)
+	}
+	if st2.TablesCount < 18 {
+		t.Errorf("expected at least 18 tables, got %d", st2.TablesCount)
+	}
+	if !st2.FileExists {
+		t.Errorf("expected FileExists = true, got false")
+	}
+	if st2.FileSizeBytes <= 0 {
+		t.Errorf("expected positive file size, got %d", st2.FileSizeBytes)
+	}
+}

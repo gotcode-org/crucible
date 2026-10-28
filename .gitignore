@@ -15,6 +15,17 @@ coverage.html
 /run/
 *.log
 
+# SQLite databases & journals
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+*.sqlite-journal
+*.sqlite-wal
+*.sqlite-shm
+
 # Environment & editor
 .env
 .env.*

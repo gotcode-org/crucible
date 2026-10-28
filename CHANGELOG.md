@@ -27,6 +27,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     ([`internal/storage/ulid.go`](./internal/storage/ulid.go)) using
     `github.com/oklog/ulid/v2` with domain entity prefixes (`run_`, `tok_`,
     `dev_`, `inv_`, `sec_`, `ses_`, `aud_`, `sch_`, `ssh_`, `wrk_`, `nbc_`).
+  - Database Status and Diagnostics Port
+    ([`internal/storage/status.go`](./internal/storage/status.go)) providing
+    integrity checking (`PRAGMA integrity_check`), WAL mode verification,
+    busy timeout reporting, table counts, and migration version metadata.
   - Hexagonal CQRS Version Subsystem
     ([`internal/version/`](./internal/version/)) providing runtime build
     metadata extraction, dependency introspection, and tabular/JSON
@@ -43,6 +47,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     ledger protected by SQLite `BEFORE UPDATE` and `BEFORE DELETE` anti-tamper
     triggers.
 - **Commands**:
+  - Added `db migrate` and `db status` subcommands to `crucibled`
+    ([`cmd/crucibled/db.go`](./cmd/crucibled/db.go)) for applying embedded
+    schema migrations, displaying migration records, and inspecting database
+    integrity, WAL pragmas, schema version, and table counts.
   - Added `config init` and `config validate` subcommands to `crucibled`
     ([`cmd/crucibled/config.go`](./cmd/crucibled/config.go)) and `cruciblectl`
     ([`cmd/cruciblectl/config.go`](./cmd/cruciblectl/config.go)), along with

@@ -66,9 +66,9 @@ Format: `[state] (Priority) [domain/binary] Task description @assignee +tag`
       @jovens@gotcode.org +phase1 +storage
 - [x] (A) [storage] Implement monotonic ULID generator and foreign key enforcer
       @jovens@gotcode.org +phase1 +storage
-- [ ] (A) [crucibled] Implement crucibled db migrate command with Lip Gloss
+- [x] (A) [crucibled] Implement crucibled db migrate command with Lip Gloss
       applied migrations report table @jovens@gotcode.org +phase1 +storage +cli
-- [ ] (B) [crucibled] Implement crucibled db status command with integrity
+- [x] (B) [crucibled] Implement crucibled db status command with integrity
       check, WAL mode, and table counts @jovens@gotcode.org +phase1 +storage
       +cli
 - [ ] (A) [crucibled] Implement crucibled start standalone HTTP daemon with
