@@ -29,7 +29,12 @@ func newRootCmd() *cobra.Command {
 	rootCmd.SetHelpFunc(ui.HandleHelp)
 	rootCmd.SetUsageFunc(ui.HandleUsage)
 
+	var configFile string
+	rootCmd.PersistentFlags().StringVarP(&configFile, "config", "c", "", "Path to configuration file")
+
 	rootCmd.AddCommand(versionCmd())
+	rootCmd.AddCommand(configCmd())
+	rootCmd.AddCommand(systemdCmd())
 
 	return rootCmd
 }

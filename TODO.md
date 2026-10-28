@@ -43,16 +43,16 @@ Format: `[state] (Priority) [domain/binary] Task description @assignee +tag`
 - [x] (B) [shared] Author Lip Gloss terminal styles, ASCII banner, formatted
       tables, and status badges in internal/ui @jovens@gotcode.org +phase1
       +tooling +cli
-- [ ] (A) [config] Implement internal/config package with ServerConfig and
+- [x] (A) [config] Implement internal/config package with ServerConfig and
       ClientConfig models, defaults, and env overrides @jovens@gotcode.org
       +phase1 +config
-- [ ] (B) [crucibled] Implement crucibled config init and validate commands
+- [x] (B) [crucibled] Implement crucibled config init and validate commands
       for YAML configuration lifecycle @jovens@gotcode.org +phase1 +crucibled
       +config
-- [ ] (B) [cruciblectl] Implement cruciblectl config init and validate commands
+- [x] (B) [cruciblectl] Implement cruciblectl config init and validate commands
       with profile and token management @jovens@gotcode.org +phase1
       +cruciblectl +config
-- [ ] (B) [crucibled] Implement crucibled systemd unit generator command with
+- [x] (B) [crucibled] Implement crucibled systemd unit generator command with
       ambient capabilities (CAP_NET_BIND_SERVICE) @jovens@gotcode.org +phase1
       +crucibled +systemd
 - [ ] (A) [storage] Author external raw SQL migration 001_initial.sql with
