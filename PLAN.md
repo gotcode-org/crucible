@@ -695,15 +695,60 @@ Crucible supports enterprise and homelab password hygiene policies:
    * On successful update, `must_change_password` is cleared to `0` and
      `password_changed_at` is updated to `CURRENT_TIMESTAMP`.
 
-### User Profile & Account Dropdown Navigation
+### Collapsible Grouped Navigation Architecture
 
-To keep the primary operations sidebar focused purely on runner pipelines
-(Overview, Schedules, Inspector, Jobs, Clusters, Inventory, Vars), account
-security is housed in an Account Dropdown Menu located in the top-right header:
-1. Displays operator avatar initial, username, role, and auth provider.
-2. Provides direct navigation to **Security & 2FA** (`/settings/2fa`) and
-   **Change Password** (`/settings/password`).
-3. Provides one-click **Sign Out** (`/logout`).
+To prevent the operational workspace from degrading into an unwieldy flat list
+of links as features expand, `web/templates/base.html` organizes navigation
+into four modular, collapsible groups:
+
+1. **OPERATOR (Core Workspace)**:
+   * Operational Dashboard (`/operator`)
+   * Pipeline Runs & Execution Queue (`#pipeline`, `#runs`)
+   * Live Logs & Run Inspector (`/operator` workspace)
+   * Worker Fleet Nodes & Cluster Mesh (`#workers`, `#mesh`)
+   * Git-backed Ansible Inventory & Variables (`#inventory`, `#vars`)
+2. **REPORTS (Telemetry & Audit)**:
+   * Execution History & HTML Reports (`/operator` reports navigation)
+   * Append-Only Audit Ledger (`/reports/audit` or future `/audit`)
+3. **USER / MY ACCOUNT (Self-Service Identity)**:
+   * Change Password (`/settings/password`)
+   * Two-Factor Authentication (`/settings/2fa`)
+   * Personal Access Tokens (`/settings/tokens` - upcoming)
+   * SSH Public Keys
+4. **ADMIN (System Governance - Role Gated)**:
+   * User Management Console (`/settings/users`)
+   * Storage & Multi-Database Engine Telemetry
+   * System Configuration & Service Profiles
+
+#### Group Navigation UX & State Retention:
+* **Active Route Auto-Expansion**: The group containing the currently active
+  route (`.ActiveNav`) automatically expands on initial page load.
+* **State Persistence**: A lightweight client script saves the collapsed or
+  expanded state of each navigation group to browser `localStorage`, ensuring
+  seamless continuity across page transitions and reloads.
+* **RBAC Visibility Gating**: Administrative sections are strictly omitted
+  from rendering for non-admin operators.
+* **Account Dropdown Redundancy**: The top-right account menu retains quick
+  shortcuts to self-service security settings and sign-out.
+
+### Administrative User Management & Operator Telemetry
+
+The `/settings/users` console provides full lifecycle administration for
+native SQLite operator accounts:
+1. **User Provisioning & Roles**: Interactive modal to create users with
+   enforced password policy toggles (`must_change_password`), role assignments
+   (`admin` vs `operator`), and account activation states.
+2. **Operator Inspection & Edit Drawer**: Clicking on any operator row opens
+   an inspection drawer to:
+   * Modify operator role and active status.
+   * Toggle forced password changes.
+   * Inspect password age, last rotation timestamp, and policy expiry status.
+3. **Associated TOTP Device Diagnostics**:
+   * Inspect all enrolled RFC 6238 TOTP devices from `user_totp_devices`.
+   * Display device friendly name, enrollment timestamp, and real-time
+     `last_used_at` telemetry.
+   * Provide administrative device revocation to assist locked-out operators
+     without requiring full account deletion.
 
 ---
 
@@ -2952,6 +2997,27 @@ operator CLI and an embedded Web management console.
 * **Verification**: Visit `/` anonymously (renders public monitor, 200 OK);
   visit `/operator` anonymously (redirects to `/login?next=/operator`, 302);
   log in and verify redirect to `/operator` with full command sidebar.
+
+#### Milestone 1-07d: Collapsible Sidebar & Operator Telemetry Drawer
+* Restructure navigation sidebar in `web/templates/base.html`:
+  * Organize links into modular, collapsible groups: `Operator`, `Reports`,
+    `User`, and `Admin`.
+  * Implement client-side `localStorage` state persistence for expanded and
+    collapsed sections.
+  * Automatically expand the section corresponding to `.ActiveNav` on load.
+  * Enforce role gating so the `Admin` section is only visible to admin users.
+* Enhance `/settings/users` with operator inspection & edit drawer:
+  * Provide modal/drawer to edit operator role, toggle active/disabled status,
+    and toggle `must_change_password`.
+  * Display password lifecycle telemetry (creation time, last rotated time,
+    and days until expiration).
+  * Display table of associated TOTP devices from `user_totp_devices` with
+    device name, enrolled date, and `last_used_at` telemetry.
+  * Provide admin device revocation action to restore access for locked-out
+    operators.
+* **Verification**: Verify sidebar collapses and expands cleanly, state
+  persists in `localStorage`, active section auto-expands, and operator edit
+  modal displays correct TOTP device list and `last_used_at` telemetry.
 
 #### Milestone 1-08: Personal Access Tokens Subsystem (`internal/tokens/`)
 * Define `TokenStore` outbound port in `internal/tokens/ports.go` with zero

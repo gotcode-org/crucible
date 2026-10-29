@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"html/template"
 	"io"
+	"reflect"
 	"strings"
 	"time"
 )
@@ -51,6 +52,20 @@ var funcMap = template.FuncMap{
 		default:
 			return "none"
 		}
+	},
+	"lookup": func(m any, key string) any {
+		if m == nil {
+			return nil
+		}
+		val := reflect.ValueOf(m)
+		if val.Kind() != reflect.Map {
+			return nil
+		}
+		elem := val.MapIndex(reflect.ValueOf(key))
+		if !elem.IsValid() {
+			return nil
+		}
+		return elem.Interface()
 	},
 }
 

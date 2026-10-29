@@ -122,9 +122,11 @@ type SettingsPasswordPageContext struct {
 // SettingsUsersPageContext carries view model data for settings_users.html.
 type SettingsUsersPageContext struct {
 	PageContext
-	Users   []auth.User
-	Message string
-	Error   string
+	Users       []auth.User
+	UserDevices map[string][]auth.TOTPDevice
+	InspectUser string
+	Message     string
+	Error       string
 }
 
 // PublicDashboardContext carries view model data for standalone

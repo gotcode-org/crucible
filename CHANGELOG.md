@@ -98,6 +98,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     `crucibled user passwd`
     ([`cmd/crucibled/user.go`](./cmd/crucibled/user.go)).
 - **Web Console Views & Templates**:
+  - Restructured navigation sidebar in
+    [`base.html`](./web/templates/base.html) into collapsible categorical
+    groups (`Operator`, `Reports`, `User`, `Admin`) with numeric count badges,
+    `localStorage` persistence, and active route auto-expansion.
+  - Added operator edit and inspection slide-over drawer in `/settings/users`
+    ([`settings_users.html`](./web/templates/settings_users.html)) enabling
+    administrators to inspect and edit roles, active status, and password
+    change flags, view password lifecycle telemetry, inspect registered TOTP
+    2FA devices with `last_used_at` timestamps, and revoke devices.
   - Added standalone `/settings/password?enforce=true` view
     ([`enforce_password.html`](./web/templates/enforce_password.html))
     providing a focused 640px card window without sidebar navigation for

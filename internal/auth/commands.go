@@ -571,6 +571,15 @@ func (s *CommandService) AdminUpdateUser(
 		return ErrUnauthorized
 	}
 
+	if cmd.AdminUsername == cmd.Username {
+		if !cmd.IsActive {
+			return ErrCannotDeactivateSelf
+		}
+		if cmd.Role != "" && cmd.Role != RoleAdmin {
+			return ErrCannotDemoteSelf
+		}
+	}
+
 	u, err := s.userStore.GetUser(ctx, cmd.Username)
 	if err != nil {
 		return err

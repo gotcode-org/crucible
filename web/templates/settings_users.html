@@ -80,6 +80,7 @@
             <th class="px-6 py-3">Operator</th>
             <th class="px-6 py-3">Role</th>
             <th class="px-6 py-3">Status</th>
+            <th class="px-6 py-3">2FA Devices</th>
             <th class="px-6 py-3">First Login Pwd Change</th>
             <th class="px-6 py-3">Password Changed</th>
             <th class="px-6 py-3">Last Login</th>
@@ -122,6 +123,20 @@
               {{ end }}
             </td>
             <td class="px-6 py-3">
+              {{ $devs := lookup $.UserDevices .Username }}
+              {{ if $devs }}
+              <span
+                class="px-2 py-0.5 rounded text-[10px] font-mono
+                  bg-emerald-500/10 text-emerald-400 border
+                  border-emerald-500/20"
+              >
+                {{ len $devs }} active
+              </span>
+              {{ else }}
+              <span class="text-zinc-600 text-[10px]">none</span>
+              {{ end }}
+            </td>
+            <td class="px-6 py-3">
               {{ if .MustChangePassword }}
               <span
                 class="px-2 py-0.5 rounded text-[10px] bg-amber-500/10
@@ -141,6 +156,15 @@
             </td>
             <td class="px-6 py-3 text-right">
               <div class="flex items-center justify-end gap-3">
+                <button
+                  type="button"
+                  class="text-emerald-400 hover:text-emerald-300
+                    hover:underline cursor-pointer inspect-btn font-semibold"
+                  data-inspect-btn="{{ .Username }}"
+                >
+                  Edit / Inspect
+                </button>
+
                 <button
                   type="button"
                   class="text-cyan-400 hover:text-cyan-300 hover:underline
@@ -453,6 +477,323 @@
     </div>
   </div>
 
+  <!-- Operator Inspection & Edit Drawers -->
+  {{ range .Users }}
+  {{ $user := . }}
+  <div
+    id="inspect-drawer-{{ .Username }}"
+    class="inspect-drawer fixed inset-0 z-50 overflow-hidden
+      bg-black/70 backdrop-blur-sm flex justify-end
+      {{ if ne $.InspectUser .Username }}hidden{{ end }}"
+  >
+    <div
+      class="w-full max-w-xl bg-[#121215] border-l border-zinc-800
+        h-full flex flex-col justify-between shadow-2xl p-6
+        overflow-y-auto space-y-6"
+    >
+      <!-- Drawer Header -->
+      <div
+        class="flex items-center justify-between border-b
+          border-zinc-800 pb-4"
+      >
+        <div>
+          <div class="flex items-center gap-2">
+            <span
+              class="w-2.5 h-2.5 rounded-full
+                {{ if .IsActive }}bg-emerald-400
+                {{ else }}bg-zinc-600{{ end }}"
+            ></span>
+            <h3 class="text-base font-bold text-white font-mono">
+              {{ .Username }}
+            </h3>
+            <span
+              class="px-2 py-0.5 rounded text-[10px] font-mono uppercase
+                {{ if eq .Role "admin" }}
+                bg-purple-500/10 text-purple-400 border border-purple-500/20
+                {{ else }}
+                bg-emerald-500/10 text-emerald-400 border border-emerald-500/20
+                {{ end }}"
+            >
+              {{ .Role }}
+            </span>
+          </div>
+          <p class="text-xs text-zinc-400 mt-1 font-mono">
+            Created: {{ formatTime .CreatedAt }}
+          </p>
+        </div>
+        <button
+          type="button"
+          class="text-zinc-400 hover:text-white font-mono text-lg
+            cursor-pointer close-inspect-drawer-btn"
+          data-drawer-user="{{ .Username }}"
+        >
+          &times;
+        </button>
+      </div>
+
+      <!-- Account Settings & Permissions Form -->
+      <form
+        action="/settings/users/update"
+        method="POST"
+        class="space-y-4 rounded-lg bg-zinc-900/50 border
+          border-zinc-800/80 p-4"
+      >
+        <input type="hidden" name="username" value="{{ .Username }}" />
+        <div
+          class="text-xs font-semibold text-white font-mono flex
+            items-center justify-between"
+        >
+          <span>ACCOUNT SETTINGS &amp; ROLES</span>
+          <span class="text-[10px] text-zinc-500 font-normal">
+            Privilege Control
+          </span>
+        </div>
+
+        <div class="space-y-1.5">
+          <label class="block text-[11px] font-mono uppercase text-zinc-400">
+            Access Role
+          </label>
+          <select
+            name="role"
+            class="w-full px-3 py-2 text-xs font-mono bg-zinc-950 border
+              border-zinc-800 rounded-lg text-zinc-200 outline-none
+              focus:border-emerald-500 focus:ring-1
+              focus:ring-emerald-500/30"
+          >
+            <option
+              value="operator"
+              {{ if eq .Role "operator" }}selected{{ end }}
+            >
+              operator (Standard Operations)
+            </option>
+            <option
+              value="viewer"
+              {{ if eq .Role "viewer" }}selected{{ end }}
+            >
+              viewer (Read-Only Observer)
+            </option>
+            <option
+              value="admin"
+              {{ if eq .Role "admin" }}selected{{ end }}
+            >
+              admin (Full System Control)
+            </option>
+          </select>
+        </div>
+
+        <div class="space-y-2 pt-1">
+          <div class="flex items-center gap-2.5">
+            <input
+              type="checkbox"
+              id="edit_active_{{ .Username }}"
+              name="active"
+              value="true"
+              {{ if .IsActive }}checked{{ end }}
+              class="rounded border-zinc-700 text-emerald-500
+                focus:ring-emerald-500 bg-zinc-900"
+            />
+            <label
+              for="edit_active_{{ .Username }}"
+              class="text-xs text-zinc-300 font-sans cursor-pointer"
+            >
+              Account Active
+              <span class="block text-[10px] text-zinc-500 font-mono">
+                Deactivated accounts cannot authenticate or run jobs
+              </span>
+            </label>
+          </div>
+
+          <div class="flex items-center gap-2.5">
+            <input
+              type="checkbox"
+              id="edit_must_change_{{ .Username }}"
+              name="must_change_password"
+              value="true"
+              {{ if .MustChangePassword }}checked{{ end }}
+              class="rounded border-zinc-700 text-emerald-500
+                focus:ring-emerald-500 bg-zinc-900"
+            />
+            <label
+              for="edit_must_change_{{ .Username }}"
+              class="text-xs text-zinc-300 font-sans cursor-pointer"
+            >
+              Require Password Change on Next Login
+              <span class="block text-[10px] text-zinc-500 font-mono">
+                Intercepts session with mandatory password rotation card
+              </span>
+            </label>
+          </div>
+        </div>
+
+        <div class="pt-2 flex justify-end">
+          <button
+            type="submit"
+            class="px-4 py-2 rounded-lg text-xs font-semibold
+              text-zinc-950 bg-emerald-400 hover:bg-emerald-300
+              transition-colors cursor-pointer shadow-md
+              shadow-emerald-400/20"
+          >
+            Save Account Changes
+          </button>
+        </div>
+      </form>
+
+      <!-- Password Lifecycle Telemetry -->
+      <div
+        class="rounded-lg bg-zinc-900/50 border border-zinc-800/80 p-4
+          space-y-3 font-mono text-xs"
+      >
+        <div
+          class="font-semibold text-white flex items-center
+            justify-between"
+        >
+          <span>PASSWORD LIFECYCLE</span>
+          {{ if .MustChangePassword }}
+          <span
+            class="text-[10px] px-1.5 py-0.5 rounded bg-amber-500/10
+              text-amber-400 border border-amber-500/20"
+          >
+            ROTATION REQUIRED
+          </span>
+          {{ else }}
+          <span
+            class="text-[10px] px-1.5 py-0.5 rounded bg-emerald-500/10
+              text-emerald-400 border border-emerald-500/20"
+          >
+            COMPLIANT
+          </span>
+          {{ end }}
+        </div>
+        <div class="grid grid-cols-2 gap-3 text-[11px]">
+          <div>
+            <div class="text-zinc-500">Last Changed At</div>
+            <div class="text-zinc-200 mt-0.5">
+              {{ formatTime .PasswordChangedAt }}
+            </div>
+          </div>
+          <div>
+            <div class="text-zinc-500">Account Created</div>
+            <div class="text-zinc-200 mt-0.5">
+              {{ formatTime .CreatedAt }}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Enrolled Two-Factor Authentication (TOTP) Devices -->
+      <div
+        class="rounded-lg bg-zinc-900/50 border border-zinc-800/80 p-4
+          space-y-3"
+      >
+        <div class="flex items-center justify-between">
+          <div class="text-xs font-semibold text-white font-mono">
+            ENROLLED 2FA DEVICES
+          </div>
+          {{ $devs := lookup $.UserDevices .Username }}
+          <span class="text-[10px] font-mono text-zinc-400">
+            {{ if $devs }}{{ len $devs }}{{ else }}0{{ end }} Registered
+          </span>
+        </div>
+
+        {{ if $devs }}
+        <div class="overflow-x-auto rounded border border-zinc-800/60">
+          <table class="w-full text-left text-xs font-mono">
+            <thead
+              class="bg-zinc-950/80 text-zinc-400 text-[10px] uppercase
+                border-b border-zinc-800/60"
+            >
+              <tr>
+                <th class="px-3 py-2">Device Name</th>
+                <th class="px-3 py-2">Enrolled</th>
+                <th class="px-3 py-2">Last Used</th>
+                <th class="px-3 py-2 text-right">Action</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-zinc-800/40">
+              {{ range $devs }}
+              <tr class="hover:bg-zinc-800/20">
+                <td class="px-3 py-2 text-zinc-200 font-medium">
+                  <span class="flex items-center gap-1.5">
+                    <span class="text-emerald-400">●</span>
+                    <span>{{ .Name }}</span>
+                  </span>
+                </td>
+                <td class="px-3 py-2 text-zinc-400 text-[11px]">
+                  {{ formatTime .CreatedAt }}
+                </td>
+                <td class="px-3 py-2 text-zinc-400 text-[11px]">
+                  {{ formatTime .LastUsedAt }}
+                </td>
+                <td class="px-3 py-2 text-right">
+                  <form
+                    action="/settings/users/revoke-device"
+                    method="POST"
+                    class="inline"
+                    onsubmit="return confirm('Revoke this 2FA device?');"
+                  >
+                    <input
+                      type="hidden"
+                      name="username"
+                      value="{{ $user.Username }}"
+                    />
+                    <input
+                      type="hidden"
+                      name="device_id"
+                      value="{{ .ID }}"
+                    />
+                    <button
+                      type="submit"
+                      class="text-rose-400 hover:text-rose-300
+                        hover:underline cursor-pointer text-[11px]"
+                    >
+                      Revoke
+                    </button>
+                  </form>
+                </td>
+              </tr>
+              {{ end }}
+            </tbody>
+          </table>
+        </div>
+        {{ else }}
+        <div
+          class="p-3 bg-zinc-950/60 border border-zinc-800/60 rounded
+            text-center"
+        >
+          <div class="text-zinc-500 font-mono text-xs">
+            No two-factor authenticator devices registered for this account.
+          </div>
+        </div>
+        {{ end }}
+      </div>
+
+      <!-- Quick Reset Footer -->
+      <div
+        class="pt-2 flex items-center justify-between border-t
+          border-zinc-800/80"
+      >
+        <button
+          type="button"
+          class="text-cyan-400 hover:text-cyan-300 hover:underline
+            cursor-pointer reset-pwd-btn text-xs font-mono"
+          data-username="{{ .Username }}"
+        >
+          Reset Password...
+        </button>
+        <button
+          type="button"
+          class="px-4 py-2 rounded-lg text-xs font-semibold
+            text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/50
+            transition-colors close-inspect-drawer-btn"
+          data-drawer-user="{{ .Username }}"
+        >
+          Close Drawer
+        </button>
+      </div>
+    </div>
+  </div>
+  {{ end }}
+
 </div>
 
 <script>
@@ -503,6 +844,32 @@
         resetModal.classList.add('hidden');
       });
     }
+
+    // Inspect Drawer open/close
+    document.querySelectorAll('.inspect-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const u = btn.getAttribute('data-inspect-btn');
+        const drawer = document.getElementById('inspect-drawer-' + u);
+        if (drawer) drawer.classList.remove('hidden');
+      });
+    });
+
+    document.querySelectorAll('.close-inspect-drawer-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const u = btn.getAttribute('data-drawer-user');
+        const drawer = document.getElementById('inspect-drawer-' + u);
+        if (drawer) drawer.classList.add('hidden');
+      });
+    });
+
+    // Close drawers on backdrop click
+    document.querySelectorAll('.inspect-drawer').forEach(drawer => {
+      drawer.addEventListener('click', (e) => {
+        if (e.target === drawer) {
+          drawer.classList.add('hidden');
+        }
+      });
+    });
   })();
 </script>
 {{ end }}

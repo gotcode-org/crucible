@@ -120,6 +120,10 @@ func TestRenderTemplate_Dashboard(t *testing.T) {
 		"GET /healthz",
 		"account-menu-btn",
 		"account-dropdown",
+		`data-nav-group="operator"`,
+		`data-nav-group="reports"`,
+		`data-nav-group="user"`,
+		`data-nav-active="true"`,
 	}
 
 	for _, substr := range expectedSubstrings {
@@ -364,6 +368,7 @@ func TestRenderTemplate_SettingsUsers(t *testing.T) {
 	if !strings.Contains(html, "User Management") ||
 		!strings.Contains(html, "alice") ||
 		!strings.Contains(html, "bob") ||
+		!strings.Contains(html, `data-nav-group="admin"`) ||
 		!strings.Contains(html, "Add New Operator") ||
 		!strings.Contains(html, "Reset Operator Password") {
 		t.Errorf("rendered settings_users missing expected content")

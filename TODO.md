@@ -138,6 +138,13 @@ Format: `[state] (Priority) [domain/binary] Task description @assignee +tag`
 - [x] (B) [web] Implement Web UI /settings/users management view (user list,
       role badges, toggle active, reset password, delete modal)
       @jovens@gotcode.org +phase1 +web +auth
+- [x] (A) [web] Restructure navigation sidebar into collapsible categorical
+      groups (Operator, Reports, User, Admin) with localStorage persistence
+      and active route auto-expand @jovens@gotcode.org +phase1 +web +ui
+- [x] (A) [web] Implement operator edit/inspection drawer in /settings/users
+      with profile/role edit, password expiry telemetry, and associated TOTP
+      device list with last_used_at timestamps and admin revocation
+      @jovens@gotcode.org +phase1 +web +auth +security
 - [ ] (B) [web] Implement first-boot setup wizard for initial admin account
       creation @jovens@gotcode.org +phase1 +web +auth
 - [ ] (B) [crucibled] Add rootless service account (User=crucible) vs PAM

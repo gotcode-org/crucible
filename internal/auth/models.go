@@ -281,4 +281,10 @@ var (
 	ErrCannotDeleteSelf = errors.New(
 		"cannot delete currently authenticated user account",
 	)
+	ErrCannotDeactivateSelf = errors.New(
+		"cannot deactivate currently authenticated user account",
+	)
+	ErrCannotDemoteSelf = errors.New(
+		"cannot demote currently authenticated admin account",
+	)
 )

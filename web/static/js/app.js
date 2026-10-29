@@ -58,4 +58,29 @@ document.addEventListener('DOMContentLoaded', () => {
       }
     });
   }
+
+  // Sidebar Collapsible Navigation Groups State Persistence
+  const navDetails = document.querySelectorAll('details[data-nav-group]');
+  navDetails.forEach((el) => {
+    const groupId = el.getAttribute('data-nav-group');
+    if (!groupId) return;
+
+    // Active route auto-expansion takes precedence over stored closed state
+    const hasActiveChild = el.querySelector('[data-nav-active="true"]');
+    if (hasActiveChild) {
+      el.open = true;
+    } else {
+      const saved = localStorage.getItem('crucible_nav_' + groupId);
+      if (saved !== null) {
+        el.open = saved === 'true';
+      }
+    }
+
+    el.addEventListener('toggle', () => {
+      localStorage.setItem(
+        'crucible_nav_' + groupId,
+        el.open ? 'true' : 'false'
+      );
+    });
+  });
 });

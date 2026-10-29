@@ -1642,7 +1642,9 @@ func testSettingsUsersAdminCRUD(
 	testAdminCreateUser(t, client, baseURL, authStore, adminCookie)
 	testAdminResetUserPassword(t, client, baseURL, adminCookie)
 	testAdminUserStatusToggle(t, client, baseURL, authStore, adminCookie)
+	testAdminUserUpdate(t, client, baseURL, authStore, adminCookie)
 	testAdminUserSelfGuards(t, client, baseURL, adminCookie)
+	testAdminRevokeDevice(t, client, baseURL, authStore, adminCookie)
 	testAdminUserDelete(t, client, baseURL, authStore, adminCookie)
 }
 
@@ -1777,6 +1779,46 @@ func testAdminUserStatusToggle(
 	}
 }
 
+func testAdminUserUpdate(
+	t *testing.T,
+	client *http.Client,
+	baseURL string,
+	authStore *auth.SQLiteStore,
+	adminCookie *http.Cookie,
+) {
+	t.Helper()
+	updateForm := url.Values{
+		"username":             {"carol"},
+		"role":                 {"admin"},
+		"active":               {"true"},
+		"must_change_password": {"false"},
+	}
+	resp, _ := doHTTPReq(
+		t,
+		client,
+		http.MethodPost,
+		baseURL+"/settings/users/update",
+		strings.NewReader(updateForm.Encode()),
+		"application/x-www-form-urlencoded",
+		adminCookie,
+	)
+	if resp.StatusCode != http.StatusFound ||
+		!strings.Contains(resp.Header.Get("Location"), "msg=") {
+		t.Fatalf("expected redirect on user update, got %d loc %q",
+			resp.StatusCode, resp.Header.Get("Location"))
+	}
+	carol, err := authStore.GetUser(context.Background(), "carol")
+	if err != nil || carol == nil {
+		t.Fatalf("expected carol in store: %v", err)
+	}
+	if carol.Role != auth.RoleAdmin {
+		t.Fatalf("expected carol role admin, got %s", carol.Role)
+	}
+	if carol.MustChangePassword {
+		t.Fatal("expected carol.MustChangePassword to be false")
+	}
+}
+
 func testAdminUserSelfGuards(
 	t *testing.T,
 	client *http.Client,
@@ -1801,6 +1843,41 @@ func testAdminUserSelfGuards(
 		t.Fatal("expected error on self-deactivation attempt")
 	}
 
+	selfDemote := url.Values{
+		"username": {"admin"},
+		"role":     {"operator"},
+		"active":   {"true"},
+	}
+	resp, _ = doHTTPReq(
+		t,
+		client,
+		http.MethodPost,
+		baseURL+"/settings/users/update",
+		strings.NewReader(selfDemote.Encode()),
+		"application/x-www-form-urlencoded",
+		adminCookie,
+	)
+	if !strings.Contains(resp.Header.Get("Location"), "error=") {
+		t.Fatal("expected error on self-demote attempt")
+	}
+
+	selfUpdateDeact := url.Values{
+		"username": {"admin"},
+		"role":     {"admin"},
+	}
+	resp, _ = doHTTPReq(
+		t,
+		client,
+		http.MethodPost,
+		baseURL+"/settings/users/update",
+		strings.NewReader(selfUpdateDeact.Encode()),
+		"application/x-www-form-urlencoded",
+		adminCookie,
+	)
+	if !strings.Contains(resp.Header.Get("Location"), "error=") {
+		t.Fatal("expected error on self-deactivate attempt via update")
+	}
+
 	selfDel := url.Values{
 		"username": {"admin"},
 	}
@@ -1815,6 +1892,81 @@ func testAdminUserSelfGuards(
 	)
 	if !strings.Contains(resp.Header.Get("Location"), "error=") {
 		t.Fatal("expected error on self-delete attempt")
+	}
+}
+
+func testAdminRevokeDevice(
+	t *testing.T,
+	client *http.Client,
+	baseURL string,
+	authStore *auth.SQLiteStore,
+	adminCookie *http.Cookie,
+) {
+	t.Helper()
+	now := time.Now().UTC()
+	dev := &auth.TOTPDevice{
+		ID:              "dev-carol-1",
+		Username:        "carol",
+		Name:            "Carol Key",
+		EncryptedSecret: "fake-encrypted-secret",
+		CreatedAt:       now,
+		LastUsedAt:      &now,
+		Enabled:         true,
+	}
+	if err := authStore.CreateDevice(
+		context.Background(),
+		dev,
+	); err != nil {
+		t.Fatalf("creating carol device: %v", err)
+	}
+
+	resp, body := doHTTPReq(
+		t,
+		client,
+		http.MethodGet,
+		baseURL+"/settings/users?inspect=carol",
+		nil,
+		"",
+		adminCookie,
+	)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf(
+			"expected 200 on inspect users, got %d",
+			resp.StatusCode,
+		)
+	}
+	if !strings.Contains(body, "Carol Key") {
+		t.Fatal("expected device name Carol Key in inspect view")
+	}
+
+	revokeForm := url.Values{
+		"username":  {"carol"},
+		"device_id": {"dev-carol-1"},
+	}
+	resp, _ = doHTTPReq(
+		t,
+		client,
+		http.MethodPost,
+		baseURL+"/settings/users/revoke-device",
+		strings.NewReader(revokeForm.Encode()),
+		"application/x-www-form-urlencoded",
+		adminCookie,
+	)
+	if resp.StatusCode != http.StatusFound ||
+		!strings.Contains(resp.Header.Get("Location"), "msg=") {
+		t.Fatalf("expected redirect with msg on revoke, got %d loc %q",
+			resp.StatusCode, resp.Header.Get("Location"))
+	}
+
+	devs, lErr := authStore.ListUserDevices(context.Background(), "carol")
+	if lErr != nil {
+		t.Fatalf("listing devices: %v", lErr)
+	}
+	if len(devs) != 0 {
+		t.Fatalf(
+			"expected 0 active devices after revocation, got %d",
+			len(devs),
+		)
 	}
 }
 

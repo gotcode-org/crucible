@@ -109,11 +109,16 @@ func (s *HTTPServer) setupRoutes() error {
 	s.mux.HandleFunc("/settings/password", s.handleSettingsPassword)
 	s.mux.HandleFunc("/settings/users", s.handleSettingsUsers)
 	s.mux.HandleFunc("/settings/users/create", s.handleSettingsUsersCreate)
+	s.mux.HandleFunc("/settings/users/update", s.handleSettingsUsersUpdate)
 	s.mux.HandleFunc(
 		"/settings/users/reset-password",
 		s.handleSettingsUsersResetPassword,
 	)
 	s.mux.HandleFunc("/settings/users/status", s.handleSettingsUsersStatus)
+	s.mux.HandleFunc(
+		"/settings/users/revoke-device",
+		s.handleSettingsUsersRevokeDevice,
+	)
 	s.mux.HandleFunc("/settings/users/delete", s.handleSettingsUsersDelete)
 
 	// JSON API endpoints
@@ -809,7 +814,11 @@ func (s *HTTPServer) handle2FA(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if r.Method != http.MethodPost {
-		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		http.Error(
+			w,
+			"Method Not Allowed",
+			http.StatusMethodNotAllowed,
+		)
 		return
 	}
 
@@ -976,7 +985,11 @@ func (s *HTTPServer) handleSettings2FAEnroll(
 	r *http.Request,
 ) {
 	if r.Method != http.MethodPost {
-		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		http.Error(
+			w,
+			"Method Not Allowed",
+			http.StatusMethodNotAllowed,
+		)
 		return
 	}
 
@@ -1021,7 +1034,11 @@ func (s *HTTPServer) handleSettings2FARevoke(
 	r *http.Request,
 ) {
 	if r.Method != http.MethodPost {
-		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		http.Error(
+			w,
+			"Method Not Allowed",
+			http.StatusMethodNotAllowed,
+		)
 		return
 	}
 
@@ -1049,7 +1066,11 @@ func (s *HTTPServer) handleSettings2FAInvite(
 	r *http.Request,
 ) {
 	if r.Method != http.MethodPost {
-		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		http.Error(
+			w,
+			"Method Not Allowed",
+			http.StatusMethodNotAllowed,
+		)
 		return
 	}
 
@@ -1345,12 +1366,24 @@ func (s *HTTPServer) handleSettingsUsers(
 	}
 
 	var users []auth.User
+	devicesByUser := make(map[string][]auth.TOTPDevice)
 	if s.authQuery != nil {
 		if uList, err := s.authQuery.ListUsers(
 			r.Context(),
 			auth.ListUsersQuery{},
 		); err == nil {
 			users = uList
+			for _, u := range users {
+				q := auth.ListDevicesQuery{
+					Username: u.Username,
+				}
+				if devs, dErr := s.authQuery.ListDevices(
+					r.Context(),
+					q,
+				); dErr == nil {
+					devicesByUser[u.Username] = devs
+				}
+			}
 		}
 	}
 
@@ -1377,9 +1410,11 @@ func (s *HTTPServer) handleSettingsUsers(
 			Message:      r.URL.Query().Get("msg"),
 			Error:        r.URL.Query().Get("error"),
 		},
-		Users:   users,
-		Message: r.URL.Query().Get("msg"),
-		Error:   r.URL.Query().Get("error"),
+		Users:       users,
+		UserDevices: devicesByUser,
+		InspectUser: r.URL.Query().Get("inspect"),
+		Message:     r.URL.Query().Get("msg"),
+		Error:       r.URL.Query().Get("error"),
 	}
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -1401,7 +1436,11 @@ func (s *HTTPServer) handleSettingsUsersCreate(
 		return
 	}
 	if r.Method != http.MethodPost {
-		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		http.Error(
+			w,
+			"Method Not Allowed",
+			http.StatusMethodNotAllowed,
+		)
 		return
 	}
 	if s.authCmd == nil {
@@ -1452,6 +1491,73 @@ func (s *HTTPServer) handleSettingsUsersCreate(
 	)
 }
 
+func (s *HTTPServer) handleSettingsUsersUpdate(
+	w http.ResponseWriter,
+	r *http.Request,
+) {
+	sess, ok := s.requireAdmin(w, r)
+	if !ok {
+		return
+	}
+	if r.Method != http.MethodPost {
+		http.Error(
+			w,
+			"Method Not Allowed",
+			http.StatusMethodNotAllowed,
+		)
+		return
+	}
+	if s.authCmd == nil {
+		http.Redirect(w, r, "/settings/users", http.StatusFound)
+		return
+	}
+
+	username := strings.TrimSpace(r.FormValue("username"))
+	roleStr := strings.TrimSpace(r.FormValue("role"))
+	active := r.FormValue("active") == "true" ||
+		r.FormValue("active") == "1" ||
+		r.FormValue("active") == "on"
+	mustChange := r.FormValue("must_change_password") == "true" ||
+		r.FormValue("must_change_password") == "1" ||
+		r.FormValue("must_change_password") == "on"
+
+	role := auth.Role(roleStr)
+	if !role.IsValid() {
+		role = auth.RoleOperator
+	}
+
+	err := s.authCmd.AdminUpdateUser(
+		r.Context(),
+		auth.AdminUpdateUserCommand{
+			AdminUsername:      sess.Username,
+			Username:           username,
+			Role:               role,
+			IsActive:           active,
+			MustChangePassword: mustChange,
+		},
+	)
+	if err != nil {
+		http.Redirect(
+			w,
+			r,
+			"/settings/users?inspect="+url.QueryEscape(username)+
+				"&error="+url.QueryEscape(err.Error()),
+			http.StatusFound,
+		)
+		return
+	}
+
+	http.Redirect(
+		w,
+		r,
+		"/settings/users?inspect="+url.QueryEscape(username)+
+			"&msg="+url.QueryEscape(
+			"Operator account updated successfully",
+		),
+		http.StatusFound,
+	)
+}
+
 func (s *HTTPServer) handleSettingsUsersResetPassword(
 	w http.ResponseWriter,
 	r *http.Request,
@@ -1461,7 +1567,11 @@ func (s *HTTPServer) handleSettingsUsersResetPassword(
 		return
 	}
 	if r.Method != http.MethodPost {
-		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		http.Error(
+			w,
+			"Method Not Allowed",
+			http.StatusMethodNotAllowed,
+		)
 		return
 	}
 	if s.authCmd == nil {
@@ -1514,7 +1624,11 @@ func (s *HTTPServer) handleSettingsUsersStatus(
 		return
 	}
 	if r.Method != http.MethodPost {
-		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		http.Error(
+			w,
+			"Method Not Allowed",
+			http.StatusMethodNotAllowed,
+		)
 		return
 	}
 	if s.authCmd == nil {
@@ -1585,6 +1699,70 @@ func (s *HTTPServer) handleSettingsUsersStatus(
 	)
 }
 
+func (s *HTTPServer) handleSettingsUsersRevokeDevice(
+	w http.ResponseWriter,
+	r *http.Request,
+) {
+	_, ok := s.requireAdmin(w, r)
+	if !ok {
+		return
+	}
+	if r.Method != http.MethodPost {
+		http.Error(
+			w,
+			"Method Not Allowed",
+			http.StatusMethodNotAllowed,
+		)
+		return
+	}
+	if s.authCmd == nil {
+		http.Redirect(w, r, "/settings/users", http.StatusFound)
+		return
+	}
+
+	username := strings.TrimSpace(r.FormValue("username"))
+	deviceID := strings.TrimSpace(r.FormValue("device_id"))
+	if username == "" || deviceID == "" {
+		http.Redirect(
+			w,
+			r,
+			"/settings/users?error="+url.QueryEscape(
+				"Invalid user or device identifier",
+			),
+			http.StatusFound,
+		)
+		return
+	}
+
+	err := s.authCmd.RevokeDevice(
+		r.Context(),
+		auth.RevokeDeviceCommand{
+			DeviceID: deviceID,
+			Username: username,
+		},
+	)
+	if err != nil {
+		http.Redirect(
+			w,
+			r,
+			"/settings/users?inspect="+url.QueryEscape(username)+
+				"&error="+url.QueryEscape(err.Error()),
+			http.StatusFound,
+		)
+		return
+	}
+
+	http.Redirect(
+		w,
+		r,
+		"/settings/users?inspect="+url.QueryEscape(username)+
+			"&msg="+url.QueryEscape(
+			"Two-factor authentication device revoked",
+		),
+		http.StatusFound,
+	)
+}
+
 func (s *HTTPServer) handleSettingsUsersDelete(
 	w http.ResponseWriter,
 	r *http.Request,
@@ -1594,7 +1772,11 @@ func (s *HTTPServer) handleSettingsUsersDelete(
 		return
 	}
 	if r.Method != http.MethodPost {
-		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		http.Error(
+			w,
+			"Method Not Allowed",
+			http.StatusMethodNotAllowed,
+		)
 		return
 	}
 	if s.authCmd == nil {
@@ -1653,7 +1835,11 @@ func writeJSON(w http.ResponseWriter, status int, data any) {
 
 func (s *HTTPServer) handleAPILogin(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		http.Error(
+			w,
+			"Method Not Allowed",
+			http.StatusMethodNotAllowed,
+		)
 		return
 	}
 	if s.authCmd == nil {
@@ -1731,7 +1917,11 @@ func (s *HTTPServer) handleAPIVerify2FA(
 	r *http.Request,
 ) {
 	if r.Method != http.MethodPost {
-		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		http.Error(
+			w,
+			"Method Not Allowed",
+			http.StatusMethodNotAllowed,
+		)
 		return
 	}
 	if s.authCmd == nil {
@@ -1834,7 +2024,11 @@ func (s *HTTPServer) handleAPIDevices(w http.ResponseWriter, r *http.Request) {
 
 func (s *HTTPServer) handleAPIInvite(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		http.Error(
+			w,
+			"Method Not Allowed",
+			http.StatusMethodNotAllowed,
+		)
 		return
 	}
 	sess, err := s.extractSession(r)
