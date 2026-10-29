@@ -170,7 +170,11 @@ func setupTestDB(t *testing.T) *sql.DB {
 		t.Fatalf("opening in-memory sqlite db: %v", err)
 	}
 
-	for _, f := range []string{"001_initial.sql", "004_sqlite_users.sql"} {
+	for _, f := range []string{
+		"001_initial.sql",
+		"004_sqlite_users.sql",
+		"005_password_lifecycle.sql",
+	} {
 		schemaPath := filepath.Join("..", "storage", "schema", f)
 		schemaSQL, err := os.ReadFile(schemaPath)
 		if err != nil {
@@ -593,5 +597,109 @@ func TestCQRS_InviteAndRedeem(t *testing.T) {
 	})
 	if lErr != nil || len(remaining) != 0 {
 		t.Errorf("expected 0 devices after revoke, got %d", len(remaining))
+	}
+}
+
+func TestPasswordLifecycleAndAdminUserManagement(t *testing.T) {
+	t.Parallel()
+	db := setupTestDB(t)
+	defer func() {
+		if cErr := db.Close(); cErr != nil {
+			t.Logf("closing test db: %v", cErr)
+		}
+	}()
+
+	store := auth.NewSQLiteStore(db)
+	authenticator := auth.NewSQLiteAuthenticator(store).
+		WithPasswordExpiry(30 * 24 * time.Hour)
+
+	masterKey := make([]byte, 32)
+	crypter, cErr := auth.NewAESGCMCrypter(masterKey)
+	if cErr != nil {
+		t.Fatalf("creating crypter: %v", cErr)
+	}
+	cmdSvc := auth.NewCommandService(
+		authenticator,
+		store,
+		store,
+		store,
+		store,
+		store,
+		crypter,
+		false,
+	)
+	querySvc := auth.NewQueryService(store, store, store, store)
+	ctx := context.Background()
+
+	// 1. Seed admin user
+	adminHash, hErr := auth.HashPassword("AdminPass12345!")
+	if hErr != nil {
+		t.Fatalf("hashing admin password: %v", hErr)
+	}
+	adminUser := &auth.User{
+		Username:           "admin",
+		PasswordHash:       &adminHash,
+		Role:               auth.RoleAdmin,
+		IsActive:           true,
+		MustChangePassword: false,
+		PasswordChangedAt:  time.Now().UTC(),
+		CreatedAt:          time.Now().UTC(),
+	}
+	if err := store.CreateUser(ctx, adminUser); err != nil {
+		t.Fatalf("create admin user: %v", err)
+	}
+
+	// 2. Admin provisions user with must_change_password = true
+	created, err := cmdSvc.AdminCreateUser(ctx, auth.AdminCreateUserCommand{
+		AdminUsername:      "admin",
+		Username:           "bob",
+		Password:           "TempPass12345!",
+		Role:               auth.RoleOperator,
+		MustChangePassword: true,
+	})
+	if err != nil {
+		t.Fatalf("AdminCreateUser: %v", err)
+	}
+	if !created.MustChangePassword {
+		t.Errorf("expected MustChangePassword true")
+	}
+
+	// 3. Bob logs in: session should have MustChangePassword = true
+	loginRes, lErr := cmdSvc.Login(ctx, auth.LoginCommand{
+		Username: "bob",
+		Password: "TempPass12345!",
+	})
+	if lErr != nil {
+		t.Fatalf("bob login: %v", lErr)
+	}
+	if loginRes.Session == nil || !loginRes.Session.MustChangePassword {
+		t.Errorf("expected session.MustChangePassword = true")
+	}
+
+	// 4. Bob changes password
+	cErr = cmdSvc.ChangePassword(ctx, auth.ChangePasswordCommand{
+		Username:        "bob",
+		CurrentPassword: "TempPass12345!",
+		NewPassword:     "NewSecurePass12345!",
+		MinLength:       12,
+	})
+	if cErr != nil {
+		t.Fatalf("ChangePassword error: %v", cErr)
+	}
+
+	// 5. Query bob: MustChangePassword should now be false
+	bobU, qErr := querySvc.GetUser(ctx, auth.GetUserQuery{Username: "bob"})
+	if qErr != nil {
+		t.Fatalf("GetUser bob: %v", qErr)
+	}
+	if bobU.MustChangePassword {
+		t.Errorf("expected MustChangePassword false after change")
+	}
+
+	// 6. Test password expiry check
+	pastTime := time.Now().UTC().Add(-45 * 24 * time.Hour)
+	bobU.PasswordChangedAt = pastTime
+	if !bobU.IsPasswordExpired(30 * 24 * time.Hour) {
+		t.Errorf("expected password to be expired for 45-day age with 30-day policy")
 	}
 }

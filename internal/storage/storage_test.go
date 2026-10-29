@@ -134,11 +134,11 @@ func TestStorage_CommandAndQueryServices(t *testing.T) {
 	if err != nil {
 		t.Fatalf("querySvc.GetDatabaseStatus() post-migration error: %v", err)
 	}
-	if st2.MigrationCount != 4 {
-		t.Errorf("expected MigrationCount = 4, got %d", st2.MigrationCount)
+	if st2.MigrationCount != 5 {
+		t.Errorf("expected MigrationCount = 5, got %d", st2.MigrationCount)
 	}
-	if st2.LatestVersion != 4 {
-		t.Errorf("expected LatestVersion = 4, got %d", st2.LatestVersion)
+	if st2.LatestVersion != 5 {
+		t.Errorf("expected LatestVersion = 5, got %d", st2.LatestVersion)
 	}
 	if st2.TablesCount < 18 {
 		t.Errorf("expected >= 18 tables, got %d", st2.TablesCount)

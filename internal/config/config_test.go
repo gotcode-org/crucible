@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"gotcode.org/crucible/internal/config"
 )
@@ -551,5 +552,44 @@ func TestSystemdAdapter_Render(t *testing.T) {
 		if !strings.Contains(unit, sub) {
 			t.Errorf("systemd unit missing expected directive %q:\n%s", sub, unit)
 		}
+	}
+}
+
+func TestPasswordPolicyConfig_ExpiryDuration(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		interval string
+		want     time.Duration
+		wantErr  bool
+	}{
+		{name: "empty_disabled", interval: "", want: 0},
+		{name: "zero_disabled", interval: "0", want: 0},
+		{name: "off_disabled", interval: "off", want: 0},
+		{name: "disabled_string", interval: "disabled", want: 0},
+		{name: "90_days", interval: "90d", want: 90 * 24 * time.Hour},
+		{name: "6_months", interval: "6m", want: 6 * 30 * 24 * time.Hour},
+		{name: "1_year", interval: "1y", want: 365 * 24 * time.Hour},
+		{name: "standard_hours", interval: "720h", want: 720 * time.Hour},
+		{name: "invalid_format", interval: "invalid", wantErr: true},
+		{name: "negative_days", interval: "-5d", wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := config.PasswordPolicyConfig{ExpiryInterval: tt.interval}
+			got, err := p.ExpiryDuration()
+			if (err != nil) != tt.wantErr {
+				t.Fatalf(
+					"ExpiryDuration() error = %v, wantErr %v",
+					err,
+					tt.wantErr,
+				)
+			}
+			if !tt.wantErr && got != tt.want {
+				t.Errorf("ExpiryDuration() = %v, want %v", got, tt.want)
+			}
+		})
 	}
 }

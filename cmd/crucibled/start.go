@@ -98,7 +98,15 @@ func startCmd() *cobra.Command {
 				})
 				restrictGroups = cfg.Auth.RestrictToGroups
 			} else {
-				authenticator = auth.NewSQLiteAuthenticator(authStore)
+				expiryDur, err := cfg.Auth.PasswordPolicy.ExpiryDuration()
+				if err != nil {
+					return fmt.Errorf(
+						"parsing password expiry interval: %w",
+						err,
+					)
+				}
+				authenticator = auth.NewSQLiteAuthenticator(authStore).
+					WithPasswordExpiry(expiryDur)
 			}
 
 			authCmd := auth.NewCommandService(
@@ -115,18 +123,20 @@ func startCmd() *cobra.Command {
 				authStore,
 				authStore,
 				authStore,
+				authStore,
 			)
 
 			appVersion := resolveAppVersion(ctx)
 			srv, sErr := server.NewServer(server.Config{
-				HTTPBind:     cfg.Server.HTTPBind,
-				HTTPPort:     cfg.Server.HTTPPort,
-				SocketPath:   cfg.Server.SocketPath,
-				SocketMode:   0660,
-				DaemonMode:   cfg.Mode,
-				Version:      appVersion,
-				AuthProvider: cfg.Auth.Provider,
-				Require2FA:   cfg.Auth.Require2FA,
+				HTTPBind:       cfg.Server.HTTPBind,
+				HTTPPort:       cfg.Server.HTTPPort,
+				SocketPath:     cfg.Server.SocketPath,
+				SocketMode:     0660,
+				DaemonMode:     cfg.Mode,
+				Version:        appVersion,
+				AuthProvider:   cfg.Auth.Provider,
+				Require2FA:     cfg.Auth.Require2FA,
+				PasswordPolicy: cfg.Auth.PasswordPolicy,
 			}, engine, nil, authCmd, authQuery)
 			if sErr != nil {
 				return fmt.Errorf("initializing server: %w", sErr)

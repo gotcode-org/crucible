@@ -1,0 +1,508 @@
+{{ define "content" }}
+<div class="space-y-6">
+
+  <!-- Header Banner -->
+  <div
+    class="rounded-xl bg-zinc-900/60 border border-zinc-800/80 p-6
+      flex flex-col md:flex-row items-start md:items-center
+      justify-between gap-4"
+  >
+    <div>
+      <div class="flex items-center gap-2 text-xs font-mono text-emerald-400">
+        <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+        <span>ACCESS CONTROL MATRIX</span>
+      </div>
+      <h1 class="text-2xl font-bold tracking-tight text-white mt-1">
+        User Management
+      </h1>
+      <p class="text-xs text-zinc-400 mt-1">
+        Provision, inspect, and administer local SQLite operator credentials
+        and access roles.
+      </p>
+    </div>
+    <div class="flex items-center gap-3">
+      <button
+        type="button"
+        id="open-add-user-modal-btn"
+        class="px-4 py-2 rounded-lg text-xs font-semibold text-zinc-950
+          bg-emerald-400 hover:bg-emerald-300 transition-colors
+          cursor-pointer shadow-lg shadow-emerald-400/20 flex
+          items-center gap-2"
+      >
+        <span class="text-sm leading-none">+</span>
+        <span>Add Operator</span>
+      </button>
+    </div>
+  </div>
+
+  {{ if .Message }}
+  <div
+    class="rounded-lg bg-emerald-500/10 border border-emerald-500/30
+      px-4 py-3 text-xs text-emerald-400 font-mono"
+  >
+    {{ .Message }}
+  </div>
+  {{ end }}
+
+  {{ if .Error }}
+  <div
+    class="rounded-lg bg-rose-500/10 border border-rose-500/30
+      px-4 py-3 text-xs text-rose-400 font-mono"
+  >
+    {{ .Error }}
+  </div>
+  {{ end }}
+
+  <!-- Users Table Card -->
+  <div
+    class="rounded-xl bg-zinc-900/40 border border-zinc-800/80 overflow-hidden"
+  >
+    <div
+      class="px-6 py-4 border-b border-zinc-800/80 flex items-center
+        justify-between"
+    >
+      <h2 class="text-sm font-semibold text-white">
+        Provisioned Operator Accounts
+      </h2>
+      <span class="text-xs font-mono text-zinc-500">
+        Total Accounts: {{ len .Users }}
+      </span>
+    </div>
+
+    {{ if .Users }}
+    <div class="overflow-x-auto">
+      <table class="w-full text-left text-xs font-mono">
+        <thead
+          class="bg-zinc-950/60 text-zinc-400 uppercase text-[10px]
+            tracking-wider border-b border-zinc-800/80"
+        >
+          <tr>
+            <th class="px-6 py-3">Operator</th>
+            <th class="px-6 py-3">Role</th>
+            <th class="px-6 py-3">Status</th>
+            <th class="px-6 py-3">First Login Pwd Change</th>
+            <th class="px-6 py-3">Password Changed</th>
+            <th class="px-6 py-3">Last Login</th>
+            <th class="px-6 py-3 text-right">Actions</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-zinc-800/50">
+          {{ range .Users }}
+          <tr class="hover:bg-zinc-800/20 transition-colors">
+            <td class="px-6 py-3 text-zinc-200 font-semibold">
+              <span class="flex items-center gap-2">
+                <span
+                  class="w-2 h-2 rounded-full
+                    {{ if .IsActive }}bg-emerald-400
+                    {{ else }}bg-zinc-600{{ end }}"
+                ></span>
+                <span>{{ .Username }}</span>
+              </span>
+            </td>
+            <td class="px-6 py-3">
+              <span
+                class="px-2 py-0.5 rounded text-[10px] font-mono uppercase
+                  {{ if eq .Role "admin" }}
+                  bg-purple-500/10 text-purple-400 border border-purple-500/20
+                  {{ else if eq .Role "operator" }}
+                  bg-emerald-500/10 text-emerald-400 border
+                  border-emerald-500/20
+                  {{ else }}
+                  bg-zinc-800 text-zinc-400 border border-zinc-700
+                  {{ end }}"
+              >
+                {{ .Role }}
+              </span>
+            </td>
+            <td class="px-6 py-3">
+              {{ if .IsActive }}
+              <span class="text-emerald-400">ACTIVE</span>
+              {{ else }}
+              <span class="text-rose-400">DISABLED</span>
+              {{ end }}
+            </td>
+            <td class="px-6 py-3">
+              {{ if .MustChangePassword }}
+              <span
+                class="px-2 py-0.5 rounded text-[10px] bg-amber-500/10
+                  text-amber-300 border border-amber-500/20"
+              >
+                REQUIRED
+              </span>
+              {{ else }}
+              <span class="text-zinc-500">NO</span>
+              {{ end }}
+            </td>
+            <td class="px-6 py-3 text-zinc-400">
+              {{ formatTime .PasswordChangedAt }}
+            </td>
+            <td class="px-6 py-3 text-zinc-400">
+              {{ formatTime .LastLogin }}
+            </td>
+            <td class="px-6 py-3 text-right">
+              <div class="flex items-center justify-end gap-3">
+                <button
+                  type="button"
+                  class="text-cyan-400 hover:text-cyan-300 hover:underline
+                    cursor-pointer reset-pwd-btn"
+                  data-username="{{ .Username }}"
+                >
+                  Reset Pwd
+                </button>
+
+                <form
+                  action="/settings/users/status"
+                  method="POST"
+                  class="inline"
+                >
+                  <input
+                    type="hidden"
+                    name="username"
+                    value="{{ .Username }}"
+                  />
+                  {{ if .IsActive }}
+                  <input type="hidden" name="active" value="false" />
+                  <button
+                    type="submit"
+                    class="text-amber-400 hover:text-amber-300 hover:underline
+                      cursor-pointer"
+                  >
+                    Deactivate
+                  </button>
+                  {{ else }}
+                  <input type="hidden" name="active" value="true" />
+                  <button
+                    type="submit"
+                    class="text-emerald-400 hover:text-emerald-300
+                      hover:underline cursor-pointer"
+                  >
+                    Activate
+                  </button>
+                  {{ end }}
+                </form>
+
+                <form
+                  action="/settings/users/delete"
+                  method="POST"
+                  class="inline"
+                  onsubmit="return confirm('Delete user permanently?');"
+                >
+                  <input
+                    type="hidden"
+                    name="username"
+                    value="{{ .Username }}"
+                  />
+                  <button
+                    type="submit"
+                    class="text-rose-400 hover:text-rose-300 hover:underline
+                      cursor-pointer"
+                  >
+                    Delete
+                  </button>
+                </form>
+              </div>
+            </td>
+          </tr>
+          {{ end }}
+        </tbody>
+      </table>
+    </div>
+    {{ else }}
+    <div class="p-8 text-center space-y-2">
+      <div class="text-zinc-400 text-sm">No users found.</div>
+      <div class="text-xs text-zinc-500 font-mono">
+        Add an operator above to manage system access.
+      </div>
+    </div>
+    {{ end }}
+  </div>
+
+  <!-- Add User Modal -->
+  <div
+    id="add-user-modal"
+    class="hidden fixed inset-0 z-50 bg-black/70 backdrop-blur-sm
+      flex items-center justify-center p-4"
+  >
+    <div
+      class="w-full max-w-md bg-[#121215] border border-zinc-800
+        rounded-xl shadow-2xl p-6 space-y-5"
+    >
+      <div
+        class="flex items-center justify-between border-b
+          border-zinc-800 pb-3"
+      >
+        <h3 class="text-sm font-semibold text-white">Add New Operator</h3>
+        <button
+          type="button"
+          id="close-add-user-modal-btn"
+          class="text-zinc-400 hover:text-white font-mono text-sm
+            cursor-pointer"
+        >
+          &times;
+        </button>
+      </div>
+
+      <form action="/settings/users/create" method="POST" class="space-y-4">
+        <div class="space-y-1.5">
+          <label
+            for="new_username"
+            class="block text-[11px] font-mono uppercase text-zinc-400"
+          >
+            Username
+          </label>
+          <input
+            type="text"
+            id="new_username"
+            name="username"
+            required
+            pattern="[a-zA-Z0-9_\-\.]{3,32}"
+            placeholder="e.g. jdoe"
+            class="w-full px-3 py-2 text-xs font-mono bg-zinc-950 border
+              border-zinc-800 rounded-lg text-zinc-200 outline-none
+              focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500/30"
+          />
+        </div>
+
+        <div class="space-y-1.5">
+          <label
+            for="user_password"
+            class="block text-[11px] font-mono uppercase text-zinc-400"
+          >
+            Initial Password
+          </label>
+          <input
+            type="password"
+            id="user_password"
+            name="password"
+            required
+            placeholder="Minimum 8 characters"
+            class="w-full px-3 py-2 text-xs font-mono bg-zinc-950 border
+              border-zinc-800 rounded-lg text-zinc-200 outline-none
+              focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500/30"
+          />
+        </div>
+
+        <div class="space-y-1.5">
+          <label
+            for="user_role"
+            class="block text-[11px] font-mono uppercase text-zinc-400"
+          >
+            Role
+          </label>
+          <select
+            id="user_role"
+            name="role"
+            class="w-full px-3 py-2 text-xs font-mono bg-zinc-950 border
+              border-zinc-800 rounded-lg text-zinc-200 outline-none
+              focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500/30"
+          >
+            <option value="operator" selected>operator (Standard Ops)</option>
+            <option value="viewer">viewer (Read-Only)</option>
+            <option value="admin">admin (Full Control)</option>
+          </select>
+        </div>
+
+        <div class="pt-1 flex items-start gap-2.5">
+          <input
+            type="checkbox"
+            id="user_must_change_pwd"
+            name="must_change_password"
+            value="true"
+            checked
+            class="mt-0.5 rounded border-zinc-700 text-emerald-500
+              focus:ring-emerald-500 bg-zinc-900"
+          />
+          <label
+            for="user_must_change_pwd"
+            class="text-xs text-zinc-300 font-sans cursor-pointer"
+          >
+            Require password change on first login
+            <span class="block text-[10px] text-zinc-500 font-mono">
+              Enforced default for all new operator accounts
+            </span>
+          </label>
+        </div>
+
+        <div
+          class="pt-3 flex items-center justify-end gap-3 border-t
+            border-zinc-800/80"
+        >
+          <button
+            type="button"
+            id="cancel-add-user-btn"
+            class="px-4 py-2 rounded-lg text-xs font-semibold text-zinc-400
+              hover:text-zinc-200 hover:bg-zinc-800/50 transition-colors"
+          >
+            Cancel
+          </button>
+          <button
+            type="submit"
+            class="px-4 py-2 rounded-lg text-xs font-semibold text-zinc-950
+              bg-emerald-400 hover:bg-emerald-300 transition-colors
+              cursor-pointer"
+          >
+            Create Operator
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Reset Password Modal -->
+  <div
+    id="reset-pwd-modal"
+    class="hidden fixed inset-0 z-50 bg-black/70 backdrop-blur-sm
+      flex items-center justify-center p-4"
+  >
+    <div
+      class="w-full max-w-md bg-[#121215] border border-zinc-800
+        rounded-xl shadow-2xl p-6 space-y-5"
+    >
+      <div
+        class="flex items-center justify-between border-b
+          border-zinc-800 pb-3"
+      >
+        <h3 class="text-sm font-semibold text-white">
+          Reset Operator Password
+        </h3>
+        <button
+          type="button"
+          id="close-reset-pwd-modal-btn"
+          class="text-zinc-400 hover:text-white font-mono text-sm
+            cursor-pointer"
+        >
+          &times;
+        </button>
+      </div>
+
+      <form
+        action="/settings/users/reset-password"
+        method="POST"
+        class="space-y-4"
+      >
+        <input type="hidden" id="reset_username" name="username" value="" />
+
+        <div>
+          <span class="text-xs text-zinc-400">
+            Resetting credentials for:
+          </span>
+          <span
+            id="reset_display_username"
+            class="text-xs font-mono font-bold text-white ml-1"
+          ></span>
+        </div>
+
+        <div class="space-y-1.5">
+          <label
+            for="reset_new_password"
+            class="block text-[11px] font-mono uppercase text-zinc-400"
+          >
+            New Password
+          </label>
+          <input
+            type="password"
+            id="reset_new_password"
+            name="new_password"
+            required
+            placeholder="Minimum 8 characters"
+            class="w-full px-3 py-2 text-xs font-mono bg-zinc-950 border
+              border-zinc-800 rounded-lg text-zinc-200 outline-none
+              focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500/30"
+          />
+        </div>
+
+        <div class="pt-1 flex items-start gap-2.5">
+          <input
+            type="checkbox"
+            id="reset_must_change_pwd"
+            name="must_change_password"
+            value="true"
+            checked
+            class="mt-0.5 rounded border-zinc-700 text-cyan-500
+              focus:ring-cyan-500 bg-zinc-900"
+          />
+          <label
+            for="reset_must_change_pwd"
+            class="text-xs text-zinc-300 font-sans cursor-pointer"
+          >
+            Require password change on next login
+          </label>
+        </div>
+
+        <div
+          class="pt-3 flex items-center justify-end gap-3 border-t
+            border-zinc-800/80"
+        >
+          <button
+            type="button"
+            id="cancel-reset-pwd-btn"
+            class="px-4 py-2 rounded-lg text-xs font-semibold text-zinc-400
+              hover:text-zinc-200 hover:bg-zinc-800/50 transition-colors"
+          >
+            Cancel
+          </button>
+          <button
+            type="submit"
+            class="px-4 py-2 rounded-lg text-xs font-semibold text-zinc-950
+              bg-cyan-400 hover:bg-cyan-300 transition-colors cursor-pointer"
+          >
+            Reset Password
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+</div>
+
+<script>
+  (function() {
+    const addModal = document.getElementById('add-user-modal');
+    const openAddBtn = document.getElementById('open-add-user-modal-btn');
+    const closeAddBtn = document.getElementById('close-add-user-modal-btn');
+    const cancelAddBtn = document.getElementById('cancel-add-user-btn');
+
+    if (openAddBtn && addModal) {
+      openAddBtn.addEventListener('click', () => {
+        addModal.classList.remove('hidden');
+      });
+    }
+    if (closeAddBtn && addModal) {
+      closeAddBtn.addEventListener('click', () => {
+        addModal.classList.add('hidden');
+      });
+    }
+    if (cancelAddBtn && addModal) {
+      cancelAddBtn.addEventListener('click', () => {
+        addModal.classList.add('hidden');
+      });
+    }
+
+    const resetModal = document.getElementById('reset-pwd-modal');
+    const closeResetBtn = document.getElementById('close-reset-pwd-modal-btn');
+    const cancelResetBtn = document.getElementById('cancel-reset-pwd-btn');
+    const resetUserInput = document.getElementById('reset_username');
+    const resetUserDisplay = document.getElementById('reset_display_username');
+
+    document.querySelectorAll('.reset-pwd-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const u = btn.getAttribute('data-username');
+        if (resetUserInput) resetUserInput.value = u;
+        if (resetUserDisplay) resetUserDisplay.textContent = u;
+        if (resetModal) resetModal.classList.remove('hidden');
+      });
+    });
+
+    if (closeResetBtn && resetModal) {
+      closeResetBtn.addEventListener('click', () => {
+        resetModal.classList.add('hidden');
+      });
+    }
+    if (cancelResetBtn && resetModal) {
+      cancelResetBtn.addEventListener('click', () => {
+        resetModal.classList.add('hidden');
+      });
+    }
+  })();
+</script>
+{{ end }}

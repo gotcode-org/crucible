@@ -11,7 +11,9 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"time"
 )
 
 // Standard operational daemon modes.
@@ -135,13 +137,76 @@ type TLSConfig struct {
 	ACMEEmail   string `yaml:"acme_email"`
 }
 
+// PasswordPolicyConfig defines password rotation and complexity requirements.
+type PasswordPolicyConfig struct {
+	RequireChangeOnFirstLogin bool   `yaml:"require_change_on_first_login"`
+	ExpiryInterval            string `yaml:"expiry_interval"`
+	MinLength                 int    `yaml:"min_length"`
+}
+
+// ExpiryDuration parses ExpiryInterval into a time.Duration.
+// Supports suffixes "d" (days), "m"/"mo" (months ~= 30d), "y" (years ~= 365d),
+// standard Go durations, or "0"/"off"/"disabled" for zero duration.
+func (p PasswordPolicyConfig) ExpiryDuration() (time.Duration, error) {
+	val := strings.ToLower(strings.TrimSpace(p.ExpiryInterval))
+	if val == "" || val == "0" || val == "off" || val == "disabled" ||
+		val == "false" {
+		return 0, nil
+	}
+	if dur, ok, err := parseCustomInterval(val); ok {
+		return dur, err
+	}
+	dur, err := time.ParseDuration(val)
+	if err != nil {
+		return 0, fmt.Errorf(
+			"invalid password expiry interval %q: %w",
+			p.ExpiryInterval,
+			err,
+		)
+	}
+	if dur < 0 {
+		return 0, fmt.Errorf(
+			"password expiry interval %q cannot be negative",
+			p.ExpiryInterval,
+		)
+	}
+	return dur, nil
+}
+
+func parseCustomInterval(val string) (time.Duration, bool, error) {
+	if strings.HasSuffix(val, "d") {
+		d, err := strconv.Atoi(strings.TrimSuffix(val, "d"))
+		if err != nil || d <= 0 {
+			return 0, true, fmt.Errorf("invalid day duration %q: %w", val, err)
+		}
+		return time.Duration(d) * 24 * time.Hour, true, nil
+	}
+	if strings.HasSuffix(val, "mo") ||
+		(strings.HasSuffix(val, "m") && !strings.Contains(val, "ms")) {
+		numStr := strings.TrimSuffix(strings.TrimSuffix(val, "mo"), "m")
+		m, err := strconv.Atoi(strings.TrimSpace(numStr))
+		if err == nil && m > 0 {
+			return time.Duration(m) * 30 * 24 * time.Hour, true, nil
+		}
+	}
+	if strings.HasSuffix(val, "y") {
+		y, err := strconv.Atoi(strings.TrimSuffix(val, "y"))
+		if err != nil || y <= 0 {
+			return 0, true, fmt.Errorf("invalid year duration %q: %w", val, err)
+		}
+		return time.Duration(y) * 365 * 24 * time.Hour, true, nil
+	}
+	return 0, false, nil
+}
+
 // AuthConfig defines operator authentication and group mapping policies.
 type AuthConfig struct {
-	Provider         string   `yaml:"provider"`
-	Require2FA       bool     `yaml:"require_2fa"`
-	AdminGroups      []string `yaml:"admin_groups"`
-	OperatorGroups   []string `yaml:"operator_groups"`
-	RestrictToGroups bool     `yaml:"restrict_to_groups"`
+	Provider         string               `yaml:"provider"`
+	Require2FA       bool                 `yaml:"require_2fa"`
+	PasswordPolicy   PasswordPolicyConfig `yaml:"password_policy"`
+	AdminGroups      []string             `yaml:"admin_groups"`
+	OperatorGroups   []string             `yaml:"operator_groups"`
+	RestrictToGroups bool                 `yaml:"restrict_to_groups"`
 }
 
 // ClientConfig encapsulates client connection profiles for cruciblectl.
@@ -222,6 +287,11 @@ func DefaultServerConfig(prod bool) *ServerConfig {
 		Auth: AuthConfig{
 			Provider:   "sqlite",
 			Require2FA: true,
+			PasswordPolicy: PasswordPolicyConfig{
+				RequireChangeOnFirstLogin: true,
+				ExpiryInterval:            "0",
+				MinLength:                 12,
+			},
 			AdminGroups: []string{
 				"root",
 				"wheel",
@@ -379,18 +449,19 @@ func (c *ServerConfig) validateTLS() error {
 
 func (c *ServerConfig) validateAuth() error {
 	p := strings.ToLower(strings.TrimSpace(c.Auth.Provider))
-	if p == "" {
-		return nil
-	}
-	switch p {
-	case "sqlite", "pam":
-		return nil
-	default:
+	if p != "" && p != "sqlite" && p != "pam" {
 		return fmt.Errorf(
 			"invalid auth provider %q: must be sqlite or pam",
 			c.Auth.Provider,
 		)
 	}
+	if c.Auth.PasswordPolicy.MinLength < 0 {
+		return errors.New("password policy min_length cannot be negative")
+	}
+	if _, err := c.Auth.PasswordPolicy.ExpiryDuration(); err != nil {
+		return err
+	}
+	return nil
 }
 
 // Validate verifies domain invariants for ClientConfig.

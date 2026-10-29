@@ -134,11 +134,12 @@ func (s *CommandService) createDirectSession(
 ) (*LoginResult, error) {
 	now := time.Now().UTC()
 	sess := &Session{
-		ID:        id.NewSessionID(),
-		Username:  user.Username,
-		Role:      user.Role,
-		CreatedAt: now,
-		ExpiresAt: now.Add(SessionTTL),
+		ID:                 id.NewSessionID(),
+		Username:           user.Username,
+		Role:               user.Role,
+		MustChangePassword: user.MustChangePassword,
+		CreatedAt:          now,
+		ExpiresAt:          now.Add(SessionTTL),
 	}
 
 	if err := s.sessionStore.CreateSession(ctx, sess); err != nil {
@@ -193,12 +194,21 @@ func (s *CommandService) Verify2FA(
 
 	role := s.resolveUserRole(ctx, ch.Username, now)
 
+	mustChange := false
+	if s.userStore != nil {
+		if u, uErr := s.userStore.GetUser(ctx, ch.Username); uErr == nil &&
+			u != nil {
+			mustChange = u.MustChangePassword
+		}
+	}
+
 	sess := &Session{
-		ID:        id.NewSessionID(),
-		Username:  ch.Username,
-		Role:      role,
-		CreatedAt: now,
-		ExpiresAt: now.Add(SessionTTL),
+		ID:                 id.NewSessionID(),
+		Username:           ch.Username,
+		Role:               role,
+		MustChangePassword: mustChange,
+		CreatedAt:          now,
+		ExpiresAt:          now.Add(SessionTTL),
 	}
 
 	if err := s.sessionStore.CreateSession(ctx, sess); err != nil {
@@ -411,6 +421,189 @@ func (s *CommandService) Logout(
 	cmd LogoutCommand,
 ) error {
 	return s.sessionStore.RevokeSession(ctx, cmd.SessionID)
+}
+
+// ChangePassword verifies current password and updates to a new password.
+func (s *CommandService) ChangePassword(
+	ctx context.Context,
+	cmd ChangePasswordCommand,
+) error {
+	username := strings.TrimSpace(cmd.Username)
+	if username == "" {
+		return ErrUserNotFound
+	}
+	if s.userStore == nil {
+		return errors.New("user store unconfigured")
+	}
+
+	u, err := s.userStore.GetUser(ctx, username)
+	if err != nil {
+		return err
+	}
+	if u.PasswordHash == nil || *u.PasswordHash == "" {
+		return ErrInvalidCredentials
+	}
+
+	match, vErr := VerifyPassword(cmd.CurrentPassword, *u.PasswordHash)
+	if vErr != nil || !match {
+		return ErrInvalidCredentials
+	}
+
+	if cmd.CurrentPassword == cmd.NewPassword {
+		return ErrPasswordUnchanged
+	}
+
+	minLen := cmd.MinLength
+	if minLen <= 0 {
+		minLen = 12
+	}
+	if len(cmd.NewPassword) < minLen {
+		return ErrPasswordTooShort
+	}
+
+	newHash, hErr := HashPassword(cmd.NewPassword)
+	if hErr != nil {
+		return fmt.Errorf("hashing password: %w", hErr)
+	}
+
+	return s.userStore.UpdatePassword(ctx, username, newHash)
+}
+
+// AdminCreateUser provisions a new user with initial credentials.
+func (s *CommandService) AdminCreateUser(
+	ctx context.Context,
+	cmd AdminCreateUserCommand,
+) (*User, error) {
+	if s.userStore == nil {
+		return nil, errors.New("user store unconfigured")
+	}
+
+	adminU, aErr := s.userStore.GetUser(ctx, cmd.AdminUsername)
+	if aErr != nil || adminU.EffectiveRole() != RoleAdmin {
+		return nil, ErrUnauthorized
+	}
+
+	username := strings.TrimSpace(cmd.Username)
+	if username == "" || !validUsernameRe.MatchString(username) {
+		return nil, errors.New("invalid username format")
+	}
+
+	if len(cmd.Password) < 8 {
+		return nil, ErrPasswordTooShort
+	}
+
+	hash, hErr := HashPassword(cmd.Password)
+	if hErr != nil {
+		return nil, fmt.Errorf("hashing password: %w", hErr)
+	}
+
+	role := cmd.Role
+	if !role.IsValid() {
+		role = RoleOperator
+	}
+
+	now := time.Now().UTC()
+	u := &User{
+		Username:           username,
+		PasswordHash:       &hash,
+		Role:               role,
+		IsActive:           true,
+		MustChangePassword: cmd.MustChangePassword,
+		PasswordChangedAt:  now,
+		CreatedAt:          now,
+	}
+
+	if err := s.userStore.CreateUser(ctx, u); err != nil {
+		return nil, err
+	}
+	return u, nil
+}
+
+// AdminResetPassword sets a new password for a user.
+func (s *CommandService) AdminResetPassword(
+	ctx context.Context,
+	cmd AdminResetPasswordCommand,
+) error {
+	if s.userStore == nil {
+		return errors.New("user store unconfigured")
+	}
+
+	adminU, aErr := s.userStore.GetUser(ctx, cmd.AdminUsername)
+	if aErr != nil || adminU.EffectiveRole() != RoleAdmin {
+		return ErrUnauthorized
+	}
+
+	username := strings.TrimSpace(cmd.Username)
+	if username == "" {
+		return ErrUserNotFound
+	}
+
+	if len(cmd.NewPassword) < 8 {
+		return ErrPasswordTooShort
+	}
+
+	hash, hErr := HashPassword(cmd.NewPassword)
+	if hErr != nil {
+		return fmt.Errorf("hashing password: %w", hErr)
+	}
+
+	if err := s.userStore.UpdatePassword(ctx, username, hash); err != nil {
+		return err
+	}
+
+	if cmd.MustChangePassword {
+		return s.userStore.SetMustChangePassword(ctx, username, true)
+	}
+	return nil
+}
+
+// AdminUpdateUser updates user role, active status, and password change flags.
+func (s *CommandService) AdminUpdateUser(
+	ctx context.Context,
+	cmd AdminUpdateUserCommand,
+) error {
+	if s.userStore == nil {
+		return errors.New("user store unconfigured")
+	}
+
+	adminU, aErr := s.userStore.GetUser(ctx, cmd.AdminUsername)
+	if aErr != nil || adminU.EffectiveRole() != RoleAdmin {
+		return ErrUnauthorized
+	}
+
+	u, err := s.userStore.GetUser(ctx, cmd.Username)
+	if err != nil {
+		return err
+	}
+
+	if cmd.Role.IsValid() {
+		u.Role = cmd.Role
+	}
+	u.IsActive = cmd.IsActive
+	u.MustChangePassword = cmd.MustChangePassword
+
+	return s.userStore.UpdateUser(ctx, u)
+}
+
+// AdminDeleteUser removes a user account from the system.
+func (s *CommandService) AdminDeleteUser(
+	ctx context.Context,
+	cmd AdminDeleteUserCommand,
+) error {
+	if s.userStore == nil {
+		return errors.New("user store unconfigured")
+	}
+
+	adminU, aErr := s.userStore.GetUser(ctx, cmd.AdminUsername)
+	if aErr != nil || adminU.EffectiveRole() != RoleAdmin {
+		return ErrUnauthorized
+	}
+
+	if cmd.AdminUsername == cmd.Username {
+		return ErrCannotDeleteSelf
+	}
+
+	return s.userStore.DeleteUser(ctx, cmd.Username)
 }
 
 func generateSecureToken(byteLen int) (string, error) {

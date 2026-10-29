@@ -125,9 +125,9 @@ func TestServer_Healthz_OK(t *testing.T) {
 	if !health.Database.IntegrityOK {
 		t.Errorf("expected integrity_ok to be true")
 	}
-	if health.Database.MigrationsApplied != 4 {
+	if health.Database.MigrationsApplied != 5 {
 		t.Errorf(
-			"expected 4 migrations applied, got %d",
+			"expected 5 migrations applied, got %d",
 			health.Database.MigrationsApplied,
 		)
 	}
@@ -1069,5 +1069,782 @@ func TestAuth_Require2FAEnforcement(t *testing.T) {
 			"expected 428 Precondition Required, got %d",
 			apiResp.StatusCode,
 		)
+	}
+}
+
+func setupPasswordLifecycleServer(
+	t *testing.T,
+	policy config.PasswordPolicyConfig,
+) (*server.HTTPServer, string, *auth.CommandService, *auth.SQLiteStore) {
+	t.Helper()
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "pwd_test.db")
+	sockPath := filepath.Join(tmpDir, "pwd_test.sock")
+
+	engine, err := storage.NewSQLiteAdapter(
+		context.Background(),
+		config.StorageConfig{
+			DatabasePath:  dbPath,
+			WALMode:       false,
+			BusyTimeoutMs: 5000,
+		},
+	)
+	if err != nil {
+		t.Fatalf("opening sqlite engine: %v", err)
+	}
+
+	if mErr := engine.Migrate(context.Background()); mErr != nil {
+		t.Fatalf("running initial migration: %v", mErr)
+	}
+
+	authStore := auth.NewSQLiteStore(engine.DB())
+	expiry, pErr := policy.ExpiryDuration()
+	if pErr != nil {
+		t.Fatalf("parsing policy duration: %v", pErr)
+	}
+	sqliteAuth := auth.NewSQLiteAuthenticator(
+		authStore,
+	).WithPasswordExpiry(expiry)
+
+	crypter := auth.NewPlaintextCrypter()
+	cmdSvc := auth.NewCommandService(
+		sqliteAuth,
+		authStore,
+		authStore,
+		authStore,
+		authStore,
+		authStore,
+		crypter,
+		false,
+	)
+	querySvc := auth.NewQueryService(
+		authStore,
+		authStore,
+		authStore,
+		authStore,
+	)
+
+	adminHash, hErr := auth.HashPassword("AdminPass123!")
+	if hErr != nil {
+		t.Fatalf("hashing admin password: %v", hErr)
+	}
+	if cErr := authStore.CreateUser(
+		context.Background(),
+		&auth.User{
+			Username:           "admin",
+			PasswordHash:       &adminHash,
+			Role:               auth.RoleAdmin,
+			IsActive:           true,
+			MustChangePassword: false,
+		},
+	); cErr != nil {
+		t.Fatalf("creating admin user: %v", cErr)
+	}
+
+	srv, err := server.NewServer(server.Config{
+		HTTPBind:       "127.0.0.1",
+		HTTPPort:       0,
+		SocketPath:     sockPath,
+		DaemonMode:     "standalone",
+		Version:        "v0.1.0-pwdtest",
+		PasswordPolicy: policy,
+	}, engine, nil, cmdSvc, querySvc)
+	if err != nil {
+		t.Fatalf("creating server: %v", err)
+	}
+
+	if sErr := srv.Start(context.Background()); sErr != nil {
+		t.Fatalf("starting server: %v", sErr)
+	}
+
+	t.Cleanup(func() {
+		if cErr := srv.Shutdown(context.Background()); cErr != nil {
+			t.Logf("shutdown server: %v", cErr)
+		}
+		if cErr := engine.Close(); cErr != nil {
+			t.Logf("close engine: %v", cErr)
+		}
+	})
+
+	return srv, "http://" + srv.HTTPAddr(), cmdSvc, authStore
+}
+
+func doHTTPReq(
+	t *testing.T,
+	client *http.Client,
+	method, urlStr string,
+	body io.Reader,
+	contentType string,
+	cookies ...*http.Cookie,
+) (*http.Response, string) {
+	t.Helper()
+	req, err := http.NewRequest(method, urlStr, body)
+	if err != nil {
+		t.Fatalf("creating %s request: %v", method, err)
+	}
+	if contentType != "" {
+		req.Header.Set("Content-Type", contentType)
+	}
+	for _, c := range cookies {
+		if c != nil {
+			req.AddCookie(c)
+		}
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("performing %s %s: %v", method, urlStr, err)
+	}
+	bodyBytes, rErr := io.ReadAll(resp.Body)
+	if rErr != nil {
+		t.Fatalf("reading response body: %v", rErr)
+	}
+	if cErr := resp.Body.Close(); cErr != nil {
+		t.Logf("closing response body: %v", cErr)
+	}
+	return resp, string(bodyBytes)
+}
+
+func findSessionCookie(resp *http.Response) *http.Cookie {
+	for _, c := range resp.Cookies() {
+		if c.Name == server.SessionCookieName {
+			return c
+		}
+	}
+	return nil
+}
+
+func TestAuthWeb_SettingsPassword(t *testing.T) {
+	t.Parallel()
+	_, baseURL, _, authStore := setupPasswordLifecycleServer(
+		t,
+		config.PasswordPolicyConfig{
+			RequireChangeOnFirstLogin: true,
+			MinLength:                 8,
+		},
+	)
+
+	client := &http.Client{
+		CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+
+	testSettingsPasswordUnauth(t, client, baseURL)
+	testSettingsPasswordAdmin(t, client, baseURL)
+	testSettingsPasswordEnforcementAndChange(t, client, baseURL, authStore)
+}
+
+func testSettingsPasswordUnauth(
+	t *testing.T,
+	client *http.Client,
+	baseURL string,
+) {
+	t.Helper()
+	resp, _ := doHTTPReq(
+		t,
+		client,
+		http.MethodGet,
+		baseURL+"/settings/password",
+		nil,
+		"",
+	)
+	if resp.StatusCode != http.StatusFound {
+		t.Fatalf("expected 302 for unauth password page, got %d",
+			resp.StatusCode)
+	}
+	if !strings.Contains(resp.Header.Get("Location"), "/login") {
+		t.Fatalf("expected redirect to /login, got %q",
+			resp.Header.Get("Location"))
+	}
+}
+
+func testSettingsPasswordAdmin(
+	t *testing.T,
+	client *http.Client,
+	baseURL string,
+) {
+	t.Helper()
+	loginForm := url.Values{
+		"username": {"admin"},
+		"password": {"AdminPass123!"},
+	}
+	resp, _ := doHTTPReq(
+		t,
+		client,
+		http.MethodPost,
+		baseURL+"/login",
+		strings.NewReader(loginForm.Encode()),
+		"application/x-www-form-urlencoded",
+	)
+	if resp.StatusCode != http.StatusFound {
+		t.Fatalf("expected 302 login, got %d", resp.StatusCode)
+	}
+	adminCookie := findSessionCookie(resp)
+	if adminCookie == nil {
+		t.Fatal("expected session cookie for admin")
+	}
+
+	resp, body := doHTTPReq(
+		t,
+		client,
+		http.MethodGet,
+		baseURL+"/settings/password",
+		nil,
+		"",
+		adminCookie,
+	)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 for admin password page, got %d",
+			resp.StatusCode)
+	}
+	if !strings.Contains(body, "Change Password") ||
+		!strings.Contains(body, "Current Password") {
+		t.Fatal("expected password change form in body")
+	}
+	if !strings.Contains(body, "<aside") {
+		t.Fatal("expected normal password page to contain sidebar")
+	}
+}
+
+func testSettingsPasswordEnforcementAndChange(
+	t *testing.T,
+	client *http.Client,
+	baseURL string,
+	authStore *auth.SQLiteStore,
+) {
+	t.Helper()
+	opHash, hErr := auth.HashPassword("InitPass123!")
+	if hErr != nil {
+		t.Fatalf("hashing initial password: %v", hErr)
+	}
+	if err := authStore.CreateUser(
+		context.Background(),
+		&auth.User{
+			Username:           "alice",
+			PasswordHash:       &opHash,
+			Role:               auth.RoleOperator,
+			IsActive:           true,
+			MustChangePassword: true,
+		},
+	); err != nil {
+		t.Fatalf("creating user alice: %v", err)
+	}
+
+	aliceCookie := loginExpectingPasswordEnforce(t, client, baseURL)
+	testPasswordMismatchAndWrongCurrent(t, client, baseURL, aliceCookie)
+	testPasswordChangeSuccess(t, client, baseURL, aliceCookie)
+}
+
+func loginExpectingPasswordEnforce(
+	t *testing.T,
+	client *http.Client,
+	baseURL string,
+) *http.Cookie {
+	t.Helper()
+	aliceForm := url.Values{
+		"username": {"alice"},
+		"password": {"InitPass123!"},
+	}
+	resp, _ := doHTTPReq(
+		t,
+		client,
+		http.MethodPost,
+		baseURL+"/login",
+		strings.NewReader(aliceForm.Encode()),
+		"application/x-www-form-urlencoded",
+	)
+	if resp.StatusCode != http.StatusFound {
+		t.Fatalf("expected 302 login for alice, got %d", resp.StatusCode)
+	}
+	if resp.Header.Get("Location") != "/settings/password?enforce=true" {
+		t.Fatalf("expected redirect to password enforce, got %q",
+			resp.Header.Get("Location"))
+	}
+	aliceCookie := findSessionCookie(resp)
+	if aliceCookie == nil {
+		t.Fatal("expected session cookie for alice")
+	}
+
+	resp, _ = doHTTPReq(
+		t,
+		client,
+		http.MethodGet,
+		baseURL+"/operator",
+		nil,
+		"",
+		aliceCookie,
+	)
+	if resp.StatusCode != http.StatusFound ||
+		resp.Header.Get("Location") != "/settings/password?enforce=true" {
+		t.Fatalf("expected 302 to password enforce, got status %d loc %q",
+			resp.StatusCode, resp.Header.Get("Location"))
+	}
+
+	enforceResp, enforceBody := doHTTPReq(
+		t,
+		client,
+		http.MethodGet,
+		baseURL+"/settings/password?enforce=true",
+		nil,
+		"",
+		aliceCookie,
+	)
+	if enforceResp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 on enforce password page, got %d",
+			enforceResp.StatusCode)
+	}
+	if !strings.Contains(enforceBody, "Password Change Required") {
+		t.Fatal("expected Password Change Required in enforce body")
+	}
+	if strings.Contains(enforceBody, "<aside") ||
+		strings.Contains(enforceBody, "account-menu-btn") {
+		t.Fatal("expected enforce password page to have no sidebar")
+	}
+
+	return aliceCookie
+}
+
+func testPasswordMismatchAndWrongCurrent(
+	t *testing.T,
+	client *http.Client,
+	baseURL string,
+	aliceCookie *http.Cookie,
+) {
+	t.Helper()
+	mismatchForm := url.Values{
+		"current_password": {"InitPass123!"},
+		"new_password":     {"NewSecurePass123!"},
+		"confirm_password": {"DifferentPass123!"},
+	}
+	resp, _ := doHTTPReq(
+		t,
+		client,
+		http.MethodPost,
+		baseURL+"/settings/password",
+		strings.NewReader(mismatchForm.Encode()),
+		"application/x-www-form-urlencoded",
+		aliceCookie,
+	)
+	if resp.StatusCode != http.StatusFound ||
+		!strings.Contains(resp.Header.Get("Location"), "error=") {
+		t.Fatalf("expected redirect with error for mismatch, got %d loc %q",
+			resp.StatusCode, resp.Header.Get("Location"))
+	}
+
+	wrongCurrentForm := url.Values{
+		"current_password": {"WrongCurrentPass123!"},
+		"new_password":     {"NewSecurePass123!"},
+		"confirm_password": {"NewSecurePass123!"},
+	}
+	resp, _ = doHTTPReq(
+		t,
+		client,
+		http.MethodPost,
+		baseURL+"/settings/password",
+		strings.NewReader(wrongCurrentForm.Encode()),
+		"application/x-www-form-urlencoded",
+		aliceCookie,
+	)
+	if resp.StatusCode != http.StatusFound ||
+		!strings.Contains(resp.Header.Get("Location"), "error=") {
+		t.Fatalf("expected redirect with error for wrong current password")
+	}
+}
+
+func testPasswordChangeSuccess(
+	t *testing.T,
+	client *http.Client,
+	baseURL string,
+	aliceCookie *http.Cookie,
+) {
+	t.Helper()
+	successForm := url.Values{
+		"current_password": {"InitPass123!"},
+		"new_password":     {"NewSecurePass123!"},
+		"confirm_password": {"NewSecurePass123!"},
+	}
+	resp, _ := doHTTPReq(
+		t,
+		client,
+		http.MethodPost,
+		baseURL+"/settings/password",
+		strings.NewReader(successForm.Encode()),
+		"application/x-www-form-urlencoded",
+		aliceCookie,
+	)
+	if resp.StatusCode != http.StatusFound ||
+		!strings.Contains(resp.Header.Get("Location"), "/operator") {
+		t.Fatalf("expected redirect to /operator after password change, got %q",
+			resp.Header.Get("Location"))
+	}
+
+	resp, _ = doHTTPReq(
+		t,
+		client,
+		http.MethodGet,
+		baseURL+"/operator",
+		nil,
+		"",
+		aliceCookie,
+	)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 OK on /operator after password change, got %d",
+			resp.StatusCode)
+	}
+
+	newLoginForm := url.Values{
+		"username": {"alice"},
+		"password": {"NewSecurePass123!"},
+	}
+	resp, _ = doHTTPReq(
+		t,
+		client,
+		http.MethodPost,
+		baseURL+"/login",
+		strings.NewReader(newLoginForm.Encode()),
+		"application/x-www-form-urlencoded",
+	)
+	if resp.StatusCode != http.StatusFound ||
+		resp.Header.Get("Location") != "/operator" {
+		t.Fatalf("expected redirect to /operator on new password login, got %q",
+			resp.Header.Get("Location"))
+	}
+}
+
+func TestAuthWeb_SettingsUsers(t *testing.T) {
+	t.Parallel()
+	_, baseURL, _, authStore := setupPasswordLifecycleServer(
+		t,
+		config.PasswordPolicyConfig{
+			RequireChangeOnFirstLogin: true,
+			MinLength:                 8,
+		},
+	)
+
+	client := &http.Client{
+		CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+
+	adminCookie := testSettingsUsersAuthGuards(t, client, baseURL, authStore)
+	testSettingsUsersAdminCRUD(t, client, baseURL, authStore, adminCookie)
+}
+
+func testSettingsUsersAuthGuards(
+	t *testing.T,
+	client *http.Client,
+	baseURL string,
+	authStore *auth.SQLiteStore,
+) *http.Cookie {
+	t.Helper()
+	resp, _ := doHTTPReq(
+		t,
+		client,
+		http.MethodGet,
+		baseURL+"/settings/users",
+		nil,
+		"",
+	)
+	if resp.StatusCode != http.StatusFound {
+		t.Fatalf("expected 302 unauth users redirect, got %d", resp.StatusCode)
+	}
+
+	opHash, hErr := auth.HashPassword("OpPass1234!")
+	if hErr != nil {
+		t.Fatalf("hashing op password: %v", hErr)
+	}
+	if err := authStore.CreateUser(
+		context.Background(),
+		&auth.User{
+			Username:           "bob",
+			PasswordHash:       &opHash,
+			Role:               auth.RoleOperator,
+			IsActive:           true,
+			MustChangePassword: false,
+		},
+	); err != nil {
+		t.Fatalf("creating user bob: %v", err)
+	}
+	bobLoginForm := url.Values{
+		"username": {"bob"},
+		"password": {"OpPass1234!"},
+	}
+	resp, _ = doHTTPReq(
+		t,
+		client,
+		http.MethodPost,
+		baseURL+"/login",
+		strings.NewReader(bobLoginForm.Encode()),
+		"application/x-www-form-urlencoded",
+	)
+	bobCookie := findSessionCookie(resp)
+
+	resp, _ = doHTTPReq(
+		t,
+		client,
+		http.MethodGet,
+		baseURL+"/settings/users",
+		nil,
+		"",
+		bobCookie,
+	)
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("expected 403 Forbidden for operator on users page, got %d",
+			resp.StatusCode)
+	}
+
+	adminLoginForm := url.Values{
+		"username": {"admin"},
+		"password": {"AdminPass123!"},
+	}
+	resp, _ = doHTTPReq(
+		t,
+		client,
+		http.MethodPost,
+		baseURL+"/login",
+		strings.NewReader(adminLoginForm.Encode()),
+		"application/x-www-form-urlencoded",
+	)
+	adminCookie := findSessionCookie(resp)
+	if adminCookie == nil {
+		t.Fatal("expected admin cookie")
+	}
+
+	resp, body := doHTTPReq(
+		t,
+		client,
+		http.MethodGet,
+		baseURL+"/settings/users",
+		nil,
+		"",
+		adminCookie,
+	)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 OK for admin on users page, got %d",
+			resp.StatusCode)
+	}
+	if !strings.Contains(body, "User Management") {
+		t.Fatal("expected User Management on admin page")
+	}
+
+	return adminCookie
+}
+
+func testSettingsUsersAdminCRUD(
+	t *testing.T,
+	client *http.Client,
+	baseURL string,
+	authStore *auth.SQLiteStore,
+	adminCookie *http.Cookie,
+) {
+	t.Helper()
+	testAdminCreateUser(t, client, baseURL, authStore, adminCookie)
+	testAdminResetUserPassword(t, client, baseURL, adminCookie)
+	testAdminUserStatusToggle(t, client, baseURL, authStore, adminCookie)
+	testAdminUserSelfGuards(t, client, baseURL, adminCookie)
+	testAdminUserDelete(t, client, baseURL, authStore, adminCookie)
+}
+
+func testAdminCreateUser(
+	t *testing.T,
+	client *http.Client,
+	baseURL string,
+	authStore *auth.SQLiteStore,
+	adminCookie *http.Cookie,
+) {
+	t.Helper()
+	createUserForm := url.Values{
+		"username":             {"carol"},
+		"password":             {"CarolPass123!"},
+		"role":                 {"operator"},
+		"must_change_password": {"true"},
+	}
+	resp, _ := doHTTPReq(
+		t,
+		client,
+		http.MethodPost,
+		baseURL+"/settings/users/create",
+		strings.NewReader(createUserForm.Encode()),
+		"application/x-www-form-urlencoded",
+		adminCookie,
+	)
+	if resp.StatusCode != http.StatusFound ||
+		!strings.Contains(resp.Header.Get("Location"), "msg=") {
+		t.Fatalf("expected redirect with msg on user create, got %d loc %q",
+			resp.StatusCode, resp.Header.Get("Location"))
+	}
+	carol, cErr := authStore.GetUser(context.Background(), "carol")
+	if cErr != nil || carol == nil {
+		t.Fatalf("expected user carol to exist in store: %v", cErr)
+	}
+	if !carol.MustChangePassword {
+		t.Fatal("expected carol.MustChangePassword to be true")
+	}
+}
+
+func testAdminResetUserPassword(
+	t *testing.T,
+	client *http.Client,
+	baseURL string,
+	adminCookie *http.Cookie,
+) {
+	t.Helper()
+	resetForm := url.Values{
+		"username":             {"carol"},
+		"new_password":         {"CarolReset123!"},
+		"must_change_password": {"true"},
+	}
+	resp, _ := doHTTPReq(
+		t,
+		client,
+		http.MethodPost,
+		baseURL+"/settings/users/reset-password",
+		strings.NewReader(resetForm.Encode()),
+		"application/x-www-form-urlencoded",
+		adminCookie,
+	)
+	if resp.StatusCode != http.StatusFound ||
+		!strings.Contains(resp.Header.Get("Location"), "msg=") {
+		t.Fatalf("expected redirect with msg on reset password, got %d loc %q",
+			resp.StatusCode, resp.Header.Get("Location"))
+	}
+}
+
+func testAdminUserStatusToggle(
+	t *testing.T,
+	client *http.Client,
+	baseURL string,
+	authStore *auth.SQLiteStore,
+	adminCookie *http.Cookie,
+) {
+	t.Helper()
+	deactForm := url.Values{
+		"username": {"carol"},
+		"active":   {"false"},
+	}
+	resp, _ := doHTTPReq(
+		t,
+		client,
+		http.MethodPost,
+		baseURL+"/settings/users/status",
+		strings.NewReader(deactForm.Encode()),
+		"application/x-www-form-urlencoded",
+		adminCookie,
+	)
+	if resp.StatusCode != http.StatusFound ||
+		!strings.Contains(resp.Header.Get("Location"), "msg=") {
+		t.Fatalf("expected redirect on deactivation, got %d loc %q",
+			resp.StatusCode, resp.Header.Get("Location"))
+	}
+	carolDeact, gErr := authStore.GetUser(context.Background(), "carol")
+	if gErr != nil || carolDeact.IsActive {
+		t.Fatal("expected carol to be deactivated")
+	}
+
+	deactLogin := url.Values{
+		"username": {"carol"},
+		"password": {"CarolReset123!"},
+	}
+	resp, _ = doHTTPReq(
+		t,
+		client,
+		http.MethodPost,
+		baseURL+"/login",
+		strings.NewReader(deactLogin.Encode()),
+		"application/x-www-form-urlencoded",
+	)
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("expected 401 for deactivated user login, got %d",
+			resp.StatusCode)
+	}
+
+	reactForm := url.Values{
+		"username": {"carol"},
+		"active":   {"true"},
+	}
+	resp, _ = doHTTPReq(
+		t,
+		client,
+		http.MethodPost,
+		baseURL+"/settings/users/status",
+		strings.NewReader(reactForm.Encode()),
+		"application/x-www-form-urlencoded",
+		adminCookie,
+	)
+	if resp.StatusCode != http.StatusFound {
+		t.Fatalf("expected redirect on reactivate, got %d", resp.StatusCode)
+	}
+}
+
+func testAdminUserSelfGuards(
+	t *testing.T,
+	client *http.Client,
+	baseURL string,
+	adminCookie *http.Cookie,
+) {
+	t.Helper()
+	selfDeact := url.Values{
+		"username": {"admin"},
+		"active":   {"false"},
+	}
+	resp, _ := doHTTPReq(
+		t,
+		client,
+		http.MethodPost,
+		baseURL+"/settings/users/status",
+		strings.NewReader(selfDeact.Encode()),
+		"application/x-www-form-urlencoded",
+		adminCookie,
+	)
+	if !strings.Contains(resp.Header.Get("Location"), "error=") {
+		t.Fatal("expected error on self-deactivation attempt")
+	}
+
+	selfDel := url.Values{
+		"username": {"admin"},
+	}
+	resp, _ = doHTTPReq(
+		t,
+		client,
+		http.MethodPost,
+		baseURL+"/settings/users/delete",
+		strings.NewReader(selfDel.Encode()),
+		"application/x-www-form-urlencoded",
+		adminCookie,
+	)
+	if !strings.Contains(resp.Header.Get("Location"), "error=") {
+		t.Fatal("expected error on self-delete attempt")
+	}
+}
+
+func testAdminUserDelete(
+	t *testing.T,
+	client *http.Client,
+	baseURL string,
+	authStore *auth.SQLiteStore,
+	adminCookie *http.Cookie,
+) {
+	t.Helper()
+	delForm := url.Values{
+		"username": {"carol"},
+	}
+	resp, _ := doHTTPReq(
+		t,
+		client,
+		http.MethodPost,
+		baseURL+"/settings/users/delete",
+		strings.NewReader(delForm.Encode()),
+		"application/x-www-form-urlencoded",
+		adminCookie,
+	)
+	if resp.StatusCode != http.StatusFound ||
+		!strings.Contains(resp.Header.Get("Location"), "msg=") {
+		t.Fatalf("expected redirect on user delete, got %d loc %q",
+			resp.StatusCode, resp.Header.Get("Location"))
+	}
+	_, dErr := authStore.GetUser(context.Background(), "carol")
+	if dErr == nil {
+		t.Fatal("expected carol to be deleted from store")
 	}
 }

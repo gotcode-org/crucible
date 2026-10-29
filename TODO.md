@@ -116,28 +116,30 @@ Format: `[state] (Priority) [domain/binary] Task description @assignee +tag`
       move operational dashboard to /operator behind auth, and implement
       standalone public monitor at / (public_dashboard.html)
       @jovens@gotcode.org +phase1 +web +security
-- [ ] (A) [storage] Author schema migration 005_password_lifecycle.sql adding
+- [x] (A) [storage] Author schema migration 005_password_lifecycle.sql adding
       must_change_password and password_changed_at to users table
       @jovens@gotcode.org +phase1 +storage +auth
-- [ ] (B) [config] Add auth.password_policy (require_change_on_first_login,
+- [x] (B) [config] Add auth.password_policy (require_change_on_first_login,
       expiry_interval, min_length) to ServerConfig @jovens@gotcode.org +phase1
       +config +auth
-- [ ] (B) [crucibled] Add --must-change-password flag (default true) and
+- [x] (B) [crucibled] Add --must-change-password flag (default true) and
       --no-must-change-password to crucibled user add @jovens@gotcode.org
       +phase1 +crucibled +auth
-- [ ] (A) [auth] Implement password expiry check and first-login change
+- [x] (A) [auth] Implement password expiry check and first-login change
       enforcement logic in internal/auth @jovens@gotcode.org +phase1 +auth
       +security
-- [ ] (B) [web] Implement Web UI /settings/password view for self-service
+- [x] (B) [web] Implement Web UI /settings/password view for self-service
       password updates and forced-change redirect barrier @jovens@gotcode.org
       +phase1 +web +auth
-- [ ] (A) [web] Implement admin user creation modal on /settings/users:
+- [x] (A) [web] Implement admin user creation modal on /settings/users:
       provision new users (username, initial password, role selector, and
       must-change-password default toggle) @jovens@gotcode.org +phase1 +web
       +auth +security
-- [ ] (B) [web] Implement Web UI /settings/users management view (user list,
-      role badges, toggle active, reset password, delete modal) and
-      first-boot setup wizard @jovens@gotcode.org +phase1 +web +auth
+- [x] (B) [web] Implement Web UI /settings/users management view (user list,
+      role badges, toggle active, reset password, delete modal)
+      @jovens@gotcode.org +phase1 +web +auth
+- [ ] (B) [web] Implement first-boot setup wizard for initial admin account
+      creation @jovens@gotcode.org +phase1 +web +auth
 - [ ] (B) [crucibled] Add rootless service account (User=crucible) vs PAM
       (User=root) profiles to systemd unit command @jovens@gotcode.org +phase1
       +crucibled +systemd
@@ -261,9 +263,9 @@ Format: `[state] (Priority) [domain/binary] Task description @assignee +tag`
 - [ ] (A) [storage] Implement pure Go PostgreSQL engine adapter (jackc/pgx/v5)
       satisfying storage.Engine in internal/storage/adapter_postgres.go
       @jovens@gotcode.org +phase3 +storage
-- [ ] (A) [storage] Implement pure Go MySQL engine adapter (go-sql-driver/mysql)
-      satisfying storage.Engine in internal/storage/adapter_mysql.go
-      @jovens@gotcode.org +phase3 +storage
+- [ ] (A) [storage] Implement pure Go MySQL engine adapter
+      (go-sql-driver/mysql) satisfying storage.Engine in
+      internal/storage/adapter_mysql.go @jovens@gotcode.org +phase3 +storage
 - [ ] (B) [storage] Author external raw SQL schemas under
       internal/storage/schema/postgres/ and internal/storage/schema/mysql/
       @jovens@gotcode.org +phase3 +storage

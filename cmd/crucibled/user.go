@@ -44,6 +44,7 @@ func userAddCmd() *cobra.Command {
 		username   string
 		roleStr    string
 		password   string
+		mustChange bool
 	)
 
 	cmd := &cobra.Command{
@@ -88,12 +89,15 @@ func userAddCmd() *cobra.Command {
 			}()
 
 			store := auth.NewSQLiteStore(engine.DB())
+			now := time.Now().UTC()
 			u := &auth.User{
-				Username:     username,
-				PasswordHash: &hash,
-				Role:         role,
-				IsActive:     true,
-				CreatedAt:    time.Now().UTC(),
+				Username:           username,
+				PasswordHash:       &hash,
+				Role:               role,
+				IsActive:           true,
+				MustChangePassword: mustChange,
+				PasswordChangedAt:  now,
+				CreatedAt:          now,
 			}
 
 			if err := store.CreateUser(ctx, u); err != nil {
@@ -126,6 +130,12 @@ func userAddCmd() *cobra.Command {
 		"p",
 		"",
 		"Password (prompted if omitted)",
+	)
+	cmd.Flags().BoolVar(
+		&mustChange,
+		"must-change-password",
+		true,
+		"Require password change on first login (default true)",
 	)
 
 	return cmd
@@ -173,6 +183,7 @@ func userPasswdCmd() *cobra.Command {
 		configPath string
 		dbPath     string
 		password   string
+		mustChange bool
 	)
 
 	cmd := &cobra.Command{
@@ -208,6 +219,12 @@ func userPasswdCmd() *cobra.Command {
 				return err
 			}
 
+			if mustChange {
+				if sErr := store.SetMustChangePassword(ctx, username, true); sErr != nil {
+					return sErr
+				}
+			}
+
 			msg := ui.SuccessMsg(
 				"Password updated successfully for user %q",
 				username,
@@ -225,6 +242,12 @@ func userPasswdCmd() *cobra.Command {
 		"p",
 		"",
 		"New password (prompted if omitted)",
+	)
+	cmd.Flags().BoolVar(
+		&mustChange,
+		"must-change-password",
+		false,
+		"Require user to change password upon next login",
 	)
 
 	return cmd

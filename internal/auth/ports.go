@@ -69,6 +69,11 @@ type UserStore interface {
 	CreateUser(ctx context.Context, u *User) error
 	UpdateUser(ctx context.Context, u *User) error
 	UpdatePassword(ctx context.Context, username, passwordHash string) error
+	SetMustChangePassword(
+		ctx context.Context,
+		username string,
+		mustChange bool,
+	) error
 	DeleteUser(ctx context.Context, username string) error
 	ListUsers(ctx context.Context) ([]User, error)
 	CountUsers(ctx context.Context) (int, error)
@@ -126,6 +131,28 @@ type CommandHandler interface {
 
 	// Logout invalidates the active user session.
 	Logout(ctx context.Context, cmd LogoutCommand) error
+
+	// ChangePassword updates an operator's own password after verifying their
+	// current password.
+	ChangePassword(ctx context.Context, cmd ChangePasswordCommand) error
+
+	// AdminCreateUser provisions a new user account with initial credentials.
+	AdminCreateUser(
+		ctx context.Context,
+		cmd AdminCreateUserCommand,
+	) (*User, error)
+
+	// AdminResetPassword sets a new password for a user by an administrator.
+	AdminResetPassword(
+		ctx context.Context,
+		cmd AdminResetPasswordCommand,
+	) error
+
+	// AdminUpdateUser updates role, active status, and password change flags.
+	AdminUpdateUser(ctx context.Context, cmd AdminUpdateUserCommand) error
+
+	// AdminDeleteUser removes a user account from the system.
+	AdminDeleteUser(ctx context.Context, cmd AdminDeleteUserCommand) error
 }
 
 // QueryHandler defines the inbound hexagonal port for read-only queries
@@ -139,4 +166,10 @@ type QueryHandler interface {
 
 	// GetInvite retrieves unconsumed invite metadata by invite token.
 	GetInvite(ctx context.Context, q GetInviteQuery) (*TOTPInvite, error)
+
+	// ListUsers returns all persistent users in the system.
+	ListUsers(ctx context.Context, q ListUsersQuery) ([]User, error)
+
+	// GetUser retrieves a single user record by username.
+	GetUser(ctx context.Context, q GetUserQuery) (*User, error)
 }

@@ -28,7 +28,11 @@ func setupTestSQLiteAuthStore(t *testing.T) (*sql.DB, *SQLiteStore) {
 		}
 	})
 
-	for _, f := range []string{"001_initial.sql", "004_sqlite_users.sql"} {
+	for _, f := range []string{
+		"001_initial.sql",
+		"004_sqlite_users.sql",
+		"005_password_lifecycle.sql",
+	} {
 		schemaPath := filepath.Join("..", "storage", "schema", f)
 		schemaSQL, err := os.ReadFile(schemaPath)
 		if err != nil {

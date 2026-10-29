@@ -35,22 +35,41 @@ func (r Role) IsValid() bool {
 // UserIdentity represents an authenticated identity returned by an
 // upstream Authenticator provider (e.g. Linux PAM, database, LDAP, OAuth).
 type UserIdentity struct {
-	Username    string   `json:"username"`
-	DisplayName string   `json:"display_name,omitempty"`
-	Role        Role     `json:"role"`
-	Provider    string   `json:"provider"`
-	Groups      []string `json:"groups,omitempty"`
+	Username           string   `json:"username"`
+	DisplayName        string   `json:"display_name,omitempty"`
+	Role               Role     `json:"role"`
+	Provider           string   `json:"provider"`
+	Groups             []string `json:"groups,omitempty"`
+	MustChangePassword bool     `json:"must_change_password"`
 }
 
 // User represents persistent user credentials and metadata in SQLite.
 type User struct {
-	Username     string     `json:"username"`
-	PasswordHash *string    `json:"-"`
-	Role         Role       `json:"role"`
-	RoleOverride *Role      `json:"role_override,omitempty"`
-	IsActive     bool       `json:"is_active"`
-	CreatedAt    time.Time  `json:"created_at"`
-	LastLogin    *time.Time `json:"last_login,omitempty"`
+	Username           string     `json:"username"`
+	PasswordHash       *string    `json:"-"`
+	Role               Role       `json:"role"`
+	RoleOverride       *Role      `json:"role_override,omitempty"`
+	IsActive           bool       `json:"is_active"`
+	MustChangePassword bool       `json:"must_change_password"`
+	PasswordChangedAt  time.Time  `json:"password_changed_at"`
+	CreatedAt          time.Time  `json:"created_at"`
+	LastLogin          *time.Time `json:"last_login,omitempty"`
+}
+
+// IsPasswordExpired reports whether the user's password age exceeds the
+// specified expiry interval. If interval <= 0, passwords never expire.
+func (u *User) IsPasswordExpired(interval time.Duration) bool {
+	if interval <= 0 {
+		return false
+	}
+	ref := u.PasswordChangedAt
+	if ref.IsZero() {
+		ref = u.CreatedAt
+	}
+	if ref.IsZero() {
+		return false
+	}
+	return time.Since(ref) > interval
 }
 
 // EffectiveRole returns RoleOverride if valid, otherwise base Role.
@@ -90,11 +109,12 @@ type TOTPInvite struct {
 
 // Session represents an active authenticated user session.
 type Session struct {
-	ID        string    `json:"id"`
-	Username  string    `json:"username"`
-	Role      Role      `json:"role"`
-	CreatedAt time.Time `json:"created_at"`
-	ExpiresAt time.Time `json:"expires_at"`
+	ID                 string    `json:"id"`
+	Username           string    `json:"username"`
+	Role               Role      `json:"role"`
+	MustChangePassword bool      `json:"must_change_password"`
+	CreatedAt          time.Time `json:"created_at"`
+	ExpiresAt          time.Time `json:"expires_at"`
 }
 
 // Challenge represents an ephemeral 5-minute pre-auth challenge token
@@ -188,6 +208,54 @@ type GetInviteQuery struct {
 	InviteToken string
 }
 
+// ChangePasswordCommand carries parameters for self-service password update.
+type ChangePasswordCommand struct {
+	Username        string
+	CurrentPassword string
+	NewPassword     string
+	MinLength       int
+}
+
+// AdminCreateUserCommand carries parameters for admin user provisioning.
+type AdminCreateUserCommand struct {
+	AdminUsername      string
+	Username           string
+	Password           string
+	Role               Role
+	MustChangePassword bool
+}
+
+// AdminResetPasswordCommand carries parameters for admin password reset.
+type AdminResetPasswordCommand struct {
+	AdminUsername      string
+	Username           string
+	NewPassword        string
+	MustChangePassword bool
+}
+
+// AdminUpdateUserCommand carries parameters for admin user modification.
+type AdminUpdateUserCommand struct {
+	AdminUsername      string
+	Username           string
+	Role               Role
+	IsActive           bool
+	MustChangePassword bool
+}
+
+// AdminDeleteUserCommand carries parameters for admin user deletion.
+type AdminDeleteUserCommand struct {
+	AdminUsername string
+	Username      string
+}
+
+// ListUsersQuery requests all persistent users in the system.
+type ListUsersQuery struct{}
+
+// GetUserQuery requests a single user by username.
+type GetUserQuery struct {
+	Username string
+}
+
 // Common authentication errors.
 var (
 	ErrInvalidCredentials = errors.New("invalid username or password")
@@ -203,5 +271,14 @@ var (
 	ErrUnauthorized       = errors.New("insufficient privileges")
 	ErrAccessDenied       = errors.New(
 		"access denied: user does not belong to an authorized group",
+	)
+	ErrPasswordTooShort = errors.New(
+		"password does not meet minimum length requirement",
+	)
+	ErrPasswordUnchanged = errors.New(
+		"new password cannot match current password",
+	)
+	ErrCannotDeleteSelf = errors.New(
+		"cannot delete currently authenticated user account",
 	)
 )

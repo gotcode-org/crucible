@@ -8,17 +8,27 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"time"
 )
 
 // SQLiteAuthenticator implements the Authenticator port using native
 // database user records with Argon2id password verification.
 type SQLiteAuthenticator struct {
-	store UserStore
+	store          UserStore
+	expiryInterval time.Duration
 }
 
 // NewSQLiteAuthenticator creates an Authenticator backed by SQLite UserStore.
 func NewSQLiteAuthenticator(store UserStore) *SQLiteAuthenticator {
 	return &SQLiteAuthenticator{store: store}
+}
+
+// WithPasswordExpiry sets the periodic password expiration interval.
+func (a *SQLiteAuthenticator) WithPasswordExpiry(
+	interval time.Duration,
+) *SQLiteAuthenticator {
+	a.expiryInterval = interval
+	return a
 }
 
 // Provider returns "sqlite".
@@ -73,10 +83,13 @@ func (a *SQLiteAuthenticator) Authenticate(
 	}
 
 	role := u.EffectiveRole()
+	mustChange := u.MustChangePassword ||
+		u.IsPasswordExpired(a.expiryInterval)
 
 	return &UserIdentity{
-		Username: u.Username,
-		Role:     role,
-		Provider: a.Provider(),
+		Username:           u.Username,
+		Role:               role,
+		Provider:           a.Provider(),
+		MustChangePassword: mustChange,
 	}, nil
 }

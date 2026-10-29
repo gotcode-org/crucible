@@ -47,10 +47,21 @@ func (s *SQLiteStore) CreateUser(ctx context.Context, u *User) error {
 		now = time.Now().UTC()
 	}
 
+	mustChangeInt := 1
+	if !u.MustChangePassword {
+		mustChangeInt = 0
+	}
+
+	pwdChanged := u.PasswordChangedAt
+	if pwdChanged.IsZero() {
+		pwdChanged = now
+	}
+
 	query := `
 INSERT INTO users (
-	username, password_hash, role, role_override, is_active, created_at
-) VALUES (?, ?, ?, ?, ?, ?)`
+	username, password_hash, role, role_override, is_active,
+	must_change_password, password_changed_at, created_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
 
 	_, err := s.db.ExecContext(
 		ctx,
@@ -60,6 +71,8 @@ INSERT INTO users (
 		role,
 		roleOverrideStr,
 		isActive,
+		mustChangeInt,
+		pwdChanged.UTC().Format(time.RFC3339),
 		now.UTC().Format(time.RFC3339),
 	)
 	if err != nil {
@@ -84,9 +97,14 @@ func (s *SQLiteStore) UpdateUser(ctx context.Context, u *User) error {
 		isActive = 0
 	}
 
+	mustChangeInt := 0
+	if u.MustChangePassword {
+		mustChangeInt = 1
+	}
+
 	query := `
 UPDATE users
-SET role = ?, role_override = ?, is_active = ?
+SET role = ?, role_override = ?, is_active = ?, must_change_password = ?
 WHERE username = ?`
 
 	res, err := s.db.ExecContext(
@@ -95,6 +113,7 @@ WHERE username = ?`
 		string(u.Role),
 		roleOverrideStr,
 		isActive,
+		mustChangeInt,
 		u.Username,
 	)
 	if err != nil {
@@ -108,15 +127,47 @@ WHERE username = ?`
 	return nil
 }
 
-// UpdatePassword updates the Argon2id password hash for a user.
+// UpdatePassword updates the Argon2id password hash for a user, resetting
+// the must_change_password flag and refreshing the password_changed_at
+// timestamp.
 func (s *SQLiteStore) UpdatePassword(
 	ctx context.Context,
 	username, passwordHash string,
 ) error {
-	query := `UPDATE users SET password_hash = ? WHERE username = ?`
-	res, err := s.db.ExecContext(ctx, query, passwordHash, username)
+	now := time.Now().UTC().Format(time.RFC3339)
+	query := `
+UPDATE users
+SET password_hash = ?, must_change_password = 0, password_changed_at = ?
+WHERE username = ?`
+	res, err := s.db.ExecContext(ctx, query, passwordHash, now, username)
 	if err != nil {
 		return fmt.Errorf("updating password for %s: %w", username, err)
+	}
+	rows, rErr := res.RowsAffected()
+	if rErr == nil && rows == 0 {
+		return ErrUserNotFound
+	}
+	return nil
+}
+
+// SetMustChangePassword updates the must_change_password flag in SQLite.
+func (s *SQLiteStore) SetMustChangePassword(
+	ctx context.Context,
+	username string,
+	mustChange bool,
+) error {
+	mustChangeInt := 0
+	if mustChange {
+		mustChangeInt = 1
+	}
+	query := `UPDATE users SET must_change_password = ? WHERE username = ?`
+	res, err := s.db.ExecContext(ctx, query, mustChangeInt, username)
+	if err != nil {
+		return fmt.Errorf(
+			"setting must_change_password for %s: %w",
+			username,
+			err,
+		)
 	}
 	rows, rErr := res.RowsAffected()
 	if rErr == nil && rows == 0 {
@@ -139,11 +190,55 @@ func (s *SQLiteStore) DeleteUser(ctx context.Context, username string) error {
 	return nil
 }
 
+type userRowScan struct {
+	uname         string
+	passHash      sql.NullString
+	roleStr       sql.NullString
+	roleOverride  sql.NullString
+	isActiveInt   int
+	mustChangeInt int
+	pwdChangedStr sql.NullString
+	createdAtStr  string
+	lastLoginStr  sql.NullString
+}
+
+func (r *userRowScan) toUser() User {
+	u := User{
+		Username:           r.uname,
+		IsActive:           r.isActiveInt == 1,
+		MustChangePassword: r.mustChangeInt == 1,
+		CreatedAt:          parseSQLiteTime(r.createdAtStr),
+	}
+	if r.pwdChangedStr.Valid && r.pwdChangedStr.String != "" {
+		u.PasswordChangedAt = parseSQLiteTime(r.pwdChangedStr.String)
+	} else {
+		u.PasswordChangedAt = u.CreatedAt
+	}
+	if r.passHash.Valid && r.passHash.String != "" {
+		h := r.passHash.String
+		u.PasswordHash = &h
+	}
+	if r.roleStr.Valid && r.roleStr.String != "" {
+		u.Role = Role(r.roleStr.String)
+	} else {
+		u.Role = RoleViewer
+	}
+	if r.roleOverride.Valid && r.roleOverride.String != "" {
+		ro := Role(r.roleOverride.String)
+		u.RoleOverride = &ro
+	}
+	if r.lastLoginStr.Valid && r.lastLoginStr.String != "" {
+		t := parseSQLiteTime(r.lastLoginStr.String)
+		u.LastLogin = &t
+	}
+	return u
+}
+
 // ListUsers returns all persistent users ordered alphabetically.
 func (s *SQLiteStore) ListUsers(ctx context.Context) ([]User, error) {
 	query := `
 SELECT username, password_hash, role, role_override, is_active,
-       created_at, last_login
+       must_change_password, password_changed_at, created_at, last_login
 FROM users
 ORDER BY username ASC`
 
@@ -159,52 +254,21 @@ ORDER BY username ASC`
 
 	var users []User
 	for rows.Next() {
-		var (
-			uname        string
-			passHash     sql.NullString
-			roleStr      sql.NullString
-			roleOverride sql.NullString
-			isActiveInt  int
-			createdAtStr string
-			lastLoginStr sql.NullString
-		)
-
+		var row userRowScan
 		if sErr := rows.Scan(
-			&uname,
-			&passHash,
-			&roleStr,
-			&roleOverride,
-			&isActiveInt,
-			&createdAtStr,
-			&lastLoginStr,
+			&row.uname,
+			&row.passHash,
+			&row.roleStr,
+			&row.roleOverride,
+			&row.isActiveInt,
+			&row.mustChangeInt,
+			&row.pwdChangedStr,
+			&row.createdAtStr,
+			&row.lastLoginStr,
 		); sErr != nil {
 			return nil, fmt.Errorf("scanning user row: %w", sErr)
 		}
-
-		u := User{
-			Username:  uname,
-			IsActive:  isActiveInt == 1,
-			CreatedAt: parseSQLiteTime(createdAtStr),
-		}
-		if passHash.Valid && passHash.String != "" {
-			h := passHash.String
-			u.PasswordHash = &h
-		}
-		if roleStr.Valid && roleStr.String != "" {
-			u.Role = Role(roleStr.String)
-		} else {
-			u.Role = RoleViewer
-		}
-		if roleOverride.Valid && roleOverride.String != "" {
-			r := Role(roleOverride.String)
-			u.RoleOverride = &r
-		}
-		if lastLoginStr.Valid && lastLoginStr.String != "" {
-			t := parseSQLiteTime(lastLoginStr.String)
-			u.LastLogin = &t
-		}
-
-		users = append(users, u)
+		users = append(users, row.toUser())
 	}
 
 	if err := rows.Err(); err != nil {
@@ -248,16 +312,33 @@ func (s *SQLiteStore) UpsertUser(ctx context.Context, u *User) error {
 		isActive = 0
 	}
 
+	mustChangeInt := 1
+	if !u.MustChangePassword {
+		mustChangeInt = 0
+	}
+	pwdChanged := u.PasswordChangedAt
+	if pwdChanged.IsZero() {
+		pwdChanged = u.CreatedAt
+	}
+	if pwdChanged.IsZero() {
+		pwdChanged = time.Now().UTC()
+	}
+
 	query := `
 INSERT INTO users (
 	username, password_hash, role, role_override, is_active,
-	created_at, last_login
-) VALUES (?, ?, ?, ?, ?, ?, ?)
+	must_change_password, password_changed_at, created_at, last_login
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(username) DO UPDATE SET
 	password_hash = COALESCE(excluded.password_hash, users.password_hash),
 	role = COALESCE(excluded.role, users.role),
 	role_override = excluded.role_override,
 	is_active = excluded.is_active,
+	must_change_password = excluded.must_change_password,
+	password_changed_at = COALESCE(
+		excluded.password_changed_at,
+		users.password_changed_at
+	),
 	last_login = COALESCE(excluded.last_login, users.last_login)`
 
 	_, err := s.db.ExecContext(
@@ -268,6 +349,8 @@ ON CONFLICT(username) DO UPDATE SET
 		role,
 		roleOverrideStr,
 		isActive,
+		mustChangeInt,
+		pwdChanged.UTC().Format(time.RFC3339),
 		u.CreatedAt.UTC().Format(time.RFC3339),
 		lastLoginStr,
 	)
@@ -284,28 +367,21 @@ func (s *SQLiteStore) GetUser(
 ) (*User, error) {
 	query := `
 SELECT username, password_hash, role, role_override, is_active,
-       created_at, last_login
+       must_change_password, password_changed_at, created_at, last_login
 FROM users
 WHERE username = ?`
 
-	var (
-		uname        string
-		passHash     sql.NullString
-		roleStr      sql.NullString
-		roleOverride sql.NullString
-		isActiveInt  int
-		createdAtStr string
-		lastLoginStr sql.NullString
-	)
-
+	var row userRowScan
 	err := s.db.QueryRowContext(ctx, query, username).Scan(
-		&uname,
-		&passHash,
-		&roleStr,
-		&roleOverride,
-		&isActiveInt,
-		&createdAtStr,
-		&lastLoginStr,
+		&row.uname,
+		&row.passHash,
+		&row.roleStr,
+		&row.roleOverride,
+		&row.isActiveInt,
+		&row.mustChangeInt,
+		&row.pwdChangedStr,
+		&row.createdAtStr,
+		&row.lastLoginStr,
 	)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -314,30 +390,8 @@ WHERE username = ?`
 		return nil, fmt.Errorf("querying user %s: %w", username, err)
 	}
 
-	u := &User{
-		Username:  uname,
-		IsActive:  isActiveInt == 1,
-		CreatedAt: parseSQLiteTime(createdAtStr),
-	}
-	if passHash.Valid && passHash.String != "" {
-		h := passHash.String
-		u.PasswordHash = &h
-	}
-	if roleStr.Valid && roleStr.String != "" {
-		u.Role = Role(roleStr.String)
-	} else {
-		u.Role = RoleViewer
-	}
-	if roleOverride.Valid && roleOverride.String != "" {
-		r := Role(roleOverride.String)
-		u.RoleOverride = &r
-	}
-	if lastLoginStr.Valid && lastLoginStr.String != "" {
-		t := parseSQLiteTime(lastLoginStr.String)
-		u.LastLogin = &t
-	}
-
-	return u, nil
+	u := row.toUser()
+	return &u, nil
 }
 
 // TouchUserLogin updates the user's last login timestamp.

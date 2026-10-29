@@ -116,6 +116,9 @@ func (m *MemoryStore) CreateUser(_ context.Context, u *User) error {
 		return ErrUserExists
 	}
 	copied := *u
+	if copied.PasswordChangedAt.IsZero() {
+		copied.PasswordChangedAt = time.Now().UTC()
+	}
 	m.users[u.Username] = &copied
 	return nil
 }
@@ -131,6 +134,7 @@ func (m *MemoryStore) UpdateUser(_ context.Context, u *User) error {
 	existing.Role = u.Role
 	existing.RoleOverride = u.RoleOverride
 	existing.IsActive = u.IsActive
+	existing.MustChangePassword = u.MustChangePassword
 	return nil
 }
 
@@ -146,6 +150,24 @@ func (m *MemoryStore) UpdatePassword(
 		return ErrUserNotFound
 	}
 	existing.PasswordHash = &passwordHash
+	existing.PasswordChangedAt = time.Now().UTC()
+	existing.MustChangePassword = false
+	return nil
+}
+
+// SetMustChangePassword updates the must_change_password flag in memory.
+func (m *MemoryStore) SetMustChangePassword(
+	_ context.Context,
+	username string,
+	mustChange bool,
+) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	existing, ok := m.users[username]
+	if !ok {
+		return ErrUserNotFound
+	}
+	existing.MustChangePassword = mustChange
 	return nil
 }
 

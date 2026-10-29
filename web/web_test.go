@@ -25,7 +25,10 @@ func TestWebFS_EmbeddedAssets(t *testing.T) {
 		"templates/login.html",
 		"templates/2fa.html",
 		"templates/enforce_2fa.html",
+		"templates/enforce_password.html",
 		"templates/settings_2fa.html",
+		"templates/settings_password.html",
+		"templates/settings_users.html",
 		"static/css/style.css",
 		"static/js/app.js",
 	}
@@ -201,6 +204,33 @@ func TestRenderStandalone_Enforce2FA(t *testing.T) {
 	}
 }
 
+func TestRenderStandalone_EnforcePassword(t *testing.T) {
+	t.Parallel()
+
+	var buf bytes.Buffer
+	err := web.RenderStandalone(&buf, "enforce_password.html", map[string]any{
+		"OperatorUser": "operator",
+		"Version":      "v0.1.0",
+		"Error":        "passwords do not match",
+		"Next":         "/operator",
+	})
+	if err != nil {
+		t.Fatalf("RenderStandalone enforce_password.html failed: %v", err)
+	}
+	html := buf.String()
+	if !strings.Contains(html, "Password Change Required") ||
+		!strings.Contains(html, "Current Password") ||
+		!strings.Contains(html, "New Password") ||
+		!strings.Contains(html, "Confirm New Password") ||
+		!strings.Contains(html, "passwords do not match") {
+		t.Errorf("enforce_password template missing expected content")
+	}
+	if strings.Contains(html, "<aside") ||
+		strings.Contains(html, "account-menu-btn") {
+		t.Errorf("enforce_password should not contain sidebar or account menu")
+	}
+}
+
 func TestRenderTemplate_Settings2FA(t *testing.T) {
 	t.Parallel()
 
@@ -240,6 +270,103 @@ func TestRenderTemplate_Settings2FA(t *testing.T) {
 		!strings.Contains(html, "JBSWY3DPEHPK3PXP") ||
 		!strings.Contains(html, "Two-Factor Authentication Required") {
 		t.Errorf("rendered settings_2fa missing expected content")
+	}
+}
+
+func TestRenderTemplate_SettingsPassword(t *testing.T) {
+	t.Parallel()
+
+	data := map[string]any{
+		"Title":        "Change Password",
+		"Version":      "v0.1.0",
+		"ActiveNav":    "settings_password",
+		"Breadcrumb":   "SETTINGS / PASSWORD",
+		"HTTPBind":     "127.0.0.1",
+		"HTTPPort":     8080,
+		"DaemonMode":   "standalone",
+		"OperatorUser": "alice",
+		"AuthState":    "AUTHENTICATED",
+		"Storage": &storage.Status{
+			Driver: "sqlite",
+		},
+		"Enforced": true,
+		"Next":     "/operator",
+		"Message":  "Password rotated",
+		"Error":    "Invalid credential",
+	}
+
+	var buf bytes.Buffer
+	if err := web.RenderTemplate(
+		&buf,
+		"settings_password.html",
+		data,
+	); err != nil {
+		t.Fatalf("RenderTemplate settings_password.html failed: %v", err)
+	}
+	html := buf.String()
+	if !strings.Contains(html, "Password Change Required") ||
+		!strings.Contains(html, "Change Password") ||
+		!strings.Contains(html, "Current Password") ||
+		!strings.Contains(html, "New Password") ||
+		!strings.Contains(html, "Confirm New Password") {
+		t.Errorf("rendered settings_password missing expected content")
+	}
+}
+
+func TestRenderTemplate_SettingsUsers(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now().UTC()
+	data := map[string]any{
+		"Title":        "User Management",
+		"Version":      "v0.1.0",
+		"ActiveNav":    "settings_users",
+		"Breadcrumb":   "SETTINGS / USERS",
+		"HTTPBind":     "127.0.0.1",
+		"HTTPPort":     8080,
+		"DaemonMode":   "standalone",
+		"OperatorUser": "root",
+		"OperatorRole": "admin",
+		"AuthState":    "AUTHENTICATED",
+		"Storage": &storage.Status{
+			Driver: "sqlite",
+		},
+		"Users": []map[string]any{
+			{
+				"Username":           "alice",
+				"Role":               "operator",
+				"IsActive":           true,
+				"MustChangePassword": true,
+				"PasswordChangedAt":  now,
+				"LastLogin":          &now,
+			},
+			{
+				"Username":           "bob",
+				"Role":               "admin",
+				"IsActive":           false,
+				"MustChangePassword": false,
+				"PasswordChangedAt":  now,
+				"LastLogin":          nil,
+			},
+		},
+		"Message": "User alice created",
+	}
+
+	var buf bytes.Buffer
+	if err := web.RenderTemplate(
+		&buf,
+		"settings_users.html",
+		data,
+	); err != nil {
+		t.Fatalf("RenderTemplate settings_users.html failed: %v", err)
+	}
+	html := buf.String()
+	if !strings.Contains(html, "User Management") ||
+		!strings.Contains(html, "alice") ||
+		!strings.Contains(html, "bob") ||
+		!strings.Contains(html, "Add New Operator") ||
+		!strings.Contains(html, "Reset Operator Password") {
+		t.Errorf("rendered settings_users missing expected content")
 	}
 }
 

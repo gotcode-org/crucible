@@ -106,6 +106,15 @@ func (s *HTTPServer) setupRoutes() error {
 	s.mux.HandleFunc("/settings/2fa/enroll", s.handleSettings2FAEnroll)
 	s.mux.HandleFunc("/settings/2fa/revoke", s.handleSettings2FARevoke)
 	s.mux.HandleFunc("/settings/2fa/invite", s.handleSettings2FAInvite)
+	s.mux.HandleFunc("/settings/password", s.handleSettingsPassword)
+	s.mux.HandleFunc("/settings/users", s.handleSettingsUsers)
+	s.mux.HandleFunc("/settings/users/create", s.handleSettingsUsersCreate)
+	s.mux.HandleFunc(
+		"/settings/users/reset-password",
+		s.handleSettingsUsersResetPassword,
+	)
+	s.mux.HandleFunc("/settings/users/status", s.handleSettingsUsersStatus)
+	s.mux.HandleFunc("/settings/users/delete", s.handleSettingsUsersDelete)
 
 	// JSON API endpoints
 	s.mux.HandleFunc("/api/v1/auth/login", s.handleAPILogin)
@@ -538,6 +547,15 @@ func (s *HTTPServer) handleOperatorDashboard(
 			)
 			return
 		}
+		if sess.MustChangePassword {
+			http.Redirect(
+				w,
+				r,
+				"/settings/password?enforce=true",
+				http.StatusFound,
+			)
+			return
+		}
 		if s.cfg.Require2FA {
 			devices, dErr := s.authQuery.ListDevices(
 				r.Context(),
@@ -706,6 +724,16 @@ func (s *HTTPServer) handleLoginPost(
 		SameSite: http.SameSiteStrictMode,
 	})
 
+	if loginRes.Session.MustChangePassword {
+		http.Redirect(
+			w,
+			r,
+			"/settings/password?enforce=true",
+			http.StatusFound,
+		)
+		return
+	}
+
 	if s.cfg.Require2FA && s.authQuery != nil {
 		devices, dErr := s.authQuery.ListDevices(
 			r.Context(),
@@ -813,6 +841,17 @@ func (s *HTTPServer) handle2FA(w http.ResponseWriter, r *http.Request) {
 		HttpOnly: true,
 		SameSite: http.SameSiteStrictMode,
 	})
+
+	if res.Session.MustChangePassword {
+		http.Redirect(
+			w,
+			r,
+			"/settings/password?enforce=true",
+			http.StatusFound,
+		)
+		return
+	}
+
 	http.Redirect(w, r, nextPath, http.StatusFound)
 }
 
@@ -845,6 +884,16 @@ func (s *HTTPServer) handleSettings2FA(
 	sess, err := s.extractSession(r)
 	if err != nil || sess == nil {
 		http.Redirect(w, r, "/login?next=/settings/2fa", http.StatusFound)
+		return
+	}
+
+	if sess.MustChangePassword {
+		http.Redirect(
+			w,
+			r,
+			"/settings/password?enforce=true",
+			http.StatusFound,
+		)
 		return
 	}
 
@@ -1080,6 +1129,518 @@ func (s *HTTPServer) handleSettings2FAInvite(
 	); err != nil {
 		http.Error(w, "Render Error", http.StatusInternalServerError)
 	}
+}
+
+func (s *HTTPServer) handleSettingsPassword(
+	w http.ResponseWriter,
+	r *http.Request,
+) {
+	sess, err := s.extractSession(r)
+	if err != nil || sess == nil {
+		http.Redirect(w, r, "/login?next=/settings/password", http.StatusFound)
+		return
+	}
+
+	if r.Method == http.MethodGet {
+		s.handleSettingsPasswordGet(w, r, sess)
+		return
+	}
+
+	if r.Method == http.MethodPost {
+		s.handleSettingsPasswordPost(w, r, sess)
+		return
+	}
+
+	http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+}
+
+func (s *HTTPServer) handleSettingsPasswordGet(
+	w http.ResponseWriter,
+	r *http.Request,
+	sess *auth.Session,
+) {
+	st := s.queryStorageStatus(r.Context())
+	uptimeDuration := time.Since(s.startedAt).Truncate(time.Second)
+	enforced := sess.MustChangePassword ||
+		r.URL.Query().Get("enforce") == "true"
+
+	pageCtx := SettingsPasswordPageContext{
+		PageContext: PageContext{
+			Title:        "Change Password",
+			Version:      s.cfg.Version,
+			ActiveNav:    "settings_password",
+			Breadcrumb:   "SETTINGS / PASSWORD",
+			HTTPBind:     s.cfg.HTTPBind,
+			HTTPPort:     s.effectivePort(),
+			SocketPath:   s.cfg.SocketPath,
+			DaemonMode:   s.cfg.DaemonMode,
+			OperatorUser: sess.Username,
+			OperatorRole: string(sess.Role),
+			AuthProvider: s.cfg.AuthProvider,
+			AuthState:    "AUTHENTICATED",
+			Uptime:       uptimeDuration.String(),
+			StartedAt:    s.startedAt,
+			Storage:      st,
+			Message:      r.URL.Query().Get("msg"),
+			Error:        r.URL.Query().Get("error"),
+		},
+		Enforced: enforced,
+		Message:  r.URL.Query().Get("msg"),
+		Error:    r.URL.Query().Get("error"),
+		Next:     s.resolveNextPath(r, "/operator"),
+	}
+
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if enforced {
+		if err := web.RenderStandalone(
+			w,
+			"enforce_password.html",
+			pageCtx,
+		); err != nil {
+			http.Error(w, "Render Error", http.StatusInternalServerError)
+		}
+		return
+	}
+
+	if err := web.RenderTemplate(
+		w,
+		"settings_password.html",
+		pageCtx,
+	); err != nil {
+		http.Error(w, "Render Error", http.StatusInternalServerError)
+	}
+}
+
+func (s *HTTPServer) handleSettingsPasswordPost(
+	w http.ResponseWriter,
+	r *http.Request,
+	sess *auth.Session,
+) {
+	if s.authCmd == nil {
+		http.Redirect(w, r, "/operator", http.StatusFound)
+		return
+	}
+
+	curr := r.FormValue("current_password")
+	newP := r.FormValue("new_password")
+	confirm := r.FormValue("confirm_password")
+	next := s.resolveNextPath(r, "/operator")
+
+	minLen := s.cfg.PasswordPolicy.MinLength
+	if minLen <= 0 {
+		minLen = 8
+	}
+
+	if msg := validatePasswordInputs(curr, newP, confirm, minLen); msg != "" {
+		s.redirectPasswordError(w, r, sess, next, msg)
+		return
+	}
+
+	err := s.authCmd.ChangePassword(r.Context(), auth.ChangePasswordCommand{
+		Username:        sess.Username,
+		CurrentPassword: curr,
+		NewPassword:     newP,
+		MinLength:       minLen,
+	})
+	if err != nil {
+		s.redirectPasswordError(
+			w,
+			r,
+			sess,
+			next,
+			mapChangePasswordError(err, minLen),
+		)
+		return
+	}
+
+	dest := "/operator?msg=" + url.QueryEscape("Password updated successfully")
+	if next != "" && next != "/settings/password" {
+		dest = next
+	}
+	http.Redirect(w, r, dest, http.StatusFound)
+}
+
+func (s *HTTPServer) redirectPasswordError(
+	w http.ResponseWriter,
+	r *http.Request,
+	sess *auth.Session,
+	next, msg string,
+) {
+	q := url.Values{}
+	q.Set("error", msg)
+	if sess.MustChangePassword || r.URL.Query().Get("enforce") == "true" {
+		q.Set("enforce", "true")
+	}
+	if next != "/operator" {
+		q.Set("next", next)
+	}
+	http.Redirect(w, r, "/settings/password?"+q.Encode(), http.StatusFound)
+}
+
+func validatePasswordInputs(
+	curr, newP, confirm string,
+	minLen int,
+) string {
+	if curr == "" || newP == "" || confirm == "" {
+		return "All password fields are required"
+	}
+	if newP != confirm {
+		return "New passwords do not match"
+	}
+	if len(newP) < minLen {
+		return fmt.Sprintf("New password must be at least %d characters", minLen)
+	}
+	return ""
+}
+
+func mapChangePasswordError(err error, minLen int) string {
+	switch {
+	case errors.Is(err, auth.ErrInvalidCredentials):
+		return "Current password is incorrect"
+	case errors.Is(err, auth.ErrPasswordUnchanged):
+		return "New password must be different from current password"
+	case errors.Is(err, auth.ErrPasswordTooShort):
+		return fmt.Sprintf("New password must be at least %d characters", minLen)
+	default:
+		return err.Error()
+	}
+}
+
+func (s *HTTPServer) requireAdmin(
+	w http.ResponseWriter,
+	r *http.Request,
+) (*auth.Session, bool) {
+	sess, err := s.extractSession(r)
+	if err != nil || sess == nil {
+		http.Redirect(w, r, "/login?next="+r.URL.Path, http.StatusFound)
+		return nil, false
+	}
+	if sess.MustChangePassword {
+		http.Redirect(
+			w,
+			r,
+			"/settings/password?enforce=true",
+			http.StatusFound,
+		)
+		return nil, false
+	}
+	if sess.Role != auth.RoleAdmin {
+		http.Error(
+			w,
+			"Forbidden: Admin privileges required",
+			http.StatusForbidden,
+		)
+		return nil, false
+	}
+	return sess, true
+}
+
+func (s *HTTPServer) handleSettingsUsers(
+	w http.ResponseWriter,
+	r *http.Request,
+) {
+	sess, ok := s.requireAdmin(w, r)
+	if !ok {
+		return
+	}
+
+	var users []auth.User
+	if s.authQuery != nil {
+		if uList, err := s.authQuery.ListUsers(
+			r.Context(),
+			auth.ListUsersQuery{},
+		); err == nil {
+			users = uList
+		}
+	}
+
+	st := s.queryStorageStatus(r.Context())
+	uptimeDuration := time.Since(s.startedAt).Truncate(time.Second)
+
+	pageCtx := SettingsUsersPageContext{
+		PageContext: PageContext{
+			Title:        "User Management",
+			Version:      s.cfg.Version,
+			ActiveNav:    "settings_users",
+			Breadcrumb:   "SETTINGS / USERS",
+			HTTPBind:     s.cfg.HTTPBind,
+			HTTPPort:     s.effectivePort(),
+			SocketPath:   s.cfg.SocketPath,
+			DaemonMode:   s.cfg.DaemonMode,
+			OperatorUser: sess.Username,
+			OperatorRole: string(sess.Role),
+			AuthProvider: s.cfg.AuthProvider,
+			AuthState:    "AUTHENTICATED",
+			Uptime:       uptimeDuration.String(),
+			StartedAt:    s.startedAt,
+			Storage:      st,
+			Message:      r.URL.Query().Get("msg"),
+			Error:        r.URL.Query().Get("error"),
+		},
+		Users:   users,
+		Message: r.URL.Query().Get("msg"),
+		Error:   r.URL.Query().Get("error"),
+	}
+
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if err := web.RenderTemplate(
+		w,
+		"settings_users.html",
+		pageCtx,
+	); err != nil {
+		http.Error(w, "Render Error", http.StatusInternalServerError)
+	}
+}
+
+func (s *HTTPServer) handleSettingsUsersCreate(
+	w http.ResponseWriter,
+	r *http.Request,
+) {
+	sess, ok := s.requireAdmin(w, r)
+	if !ok {
+		return
+	}
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.authCmd == nil {
+		http.Redirect(w, r, "/settings/users", http.StatusFound)
+		return
+	}
+
+	username := strings.TrimSpace(r.FormValue("username"))
+	password := r.FormValue("password")
+	roleStr := strings.TrimSpace(r.FormValue("role"))
+	mustChange := r.FormValue("must_change_password") == "true" ||
+		r.FormValue("must_change_password") == "1" ||
+		r.FormValue("must_change_password") == "on"
+
+	role := auth.Role(roleStr)
+	if !role.IsValid() {
+		role = auth.RoleOperator
+	}
+
+	_, err := s.authCmd.AdminCreateUser(
+		r.Context(),
+		auth.AdminCreateUserCommand{
+			AdminUsername:      sess.Username,
+			Username:           username,
+			Password:           password,
+			Role:               role,
+			MustChangePassword: mustChange,
+		},
+	)
+	if err != nil {
+		http.Redirect(
+			w,
+			r,
+			"/settings/users?error="+url.QueryEscape(err.Error()),
+			http.StatusFound,
+		)
+		return
+	}
+
+	http.Redirect(
+		w,
+		r,
+		"/settings/users?msg="+url.QueryEscape(fmt.Sprintf(
+			"Operator %s provisioned successfully",
+			username,
+		)),
+		http.StatusFound,
+	)
+}
+
+func (s *HTTPServer) handleSettingsUsersResetPassword(
+	w http.ResponseWriter,
+	r *http.Request,
+) {
+	sess, ok := s.requireAdmin(w, r)
+	if !ok {
+		return
+	}
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.authCmd == nil {
+		http.Redirect(w, r, "/settings/users", http.StatusFound)
+		return
+	}
+
+	username := strings.TrimSpace(r.FormValue("username"))
+	newPassword := r.FormValue("new_password")
+	mustChange := r.FormValue("must_change_password") == "true" ||
+		r.FormValue("must_change_password") == "1" ||
+		r.FormValue("must_change_password") == "on"
+
+	err := s.authCmd.AdminResetPassword(
+		r.Context(),
+		auth.AdminResetPasswordCommand{
+			AdminUsername:      sess.Username,
+			Username:           username,
+			NewPassword:        newPassword,
+			MustChangePassword: mustChange,
+		},
+	)
+	if err != nil {
+		http.Redirect(
+			w,
+			r,
+			"/settings/users?error="+url.QueryEscape(err.Error()),
+			http.StatusFound,
+		)
+		return
+	}
+
+	http.Redirect(
+		w,
+		r,
+		"/settings/users?msg="+url.QueryEscape(fmt.Sprintf(
+			"Password for %s reset successfully",
+			username,
+		)),
+		http.StatusFound,
+	)
+}
+
+func (s *HTTPServer) handleSettingsUsersStatus(
+	w http.ResponseWriter,
+	r *http.Request,
+) {
+	sess, ok := s.requireAdmin(w, r)
+	if !ok {
+		return
+	}
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.authCmd == nil {
+		http.Redirect(w, r, "/settings/users", http.StatusFound)
+		return
+	}
+
+	username := strings.TrimSpace(r.FormValue("username"))
+	if username == sess.Username {
+		http.Redirect(
+			w,
+			r,
+			"/settings/users?error="+url.QueryEscape(
+				"Cannot change status of own account",
+			),
+			http.StatusFound,
+		)
+		return
+	}
+
+	active := r.FormValue("active") == "true" || r.FormValue("active") == "1"
+
+	var currentRole auth.Role = auth.RoleOperator
+	mustChange := false
+	if s.authQuery != nil {
+		if u, err := s.authQuery.GetUser(
+			r.Context(),
+			auth.GetUserQuery{Username: username},
+		); err == nil && u != nil {
+			currentRole = u.Role
+			mustChange = u.MustChangePassword
+		}
+	}
+
+	err := s.authCmd.AdminUpdateUser(
+		r.Context(),
+		auth.AdminUpdateUserCommand{
+			AdminUsername:      sess.Username,
+			Username:           username,
+			Role:               currentRole,
+			IsActive:           active,
+			MustChangePassword: mustChange,
+		},
+	)
+	if err != nil {
+		http.Redirect(
+			w,
+			r,
+			"/settings/users?error="+url.QueryEscape(err.Error()),
+			http.StatusFound,
+		)
+		return
+	}
+
+	stateMsg := "activated"
+	if !active {
+		stateMsg = "deactivated"
+	}
+	http.Redirect(
+		w,
+		r,
+		"/settings/users?msg="+url.QueryEscape(fmt.Sprintf(
+			"Operator %s %s successfully",
+			username,
+			stateMsg,
+		)),
+		http.StatusFound,
+	)
+}
+
+func (s *HTTPServer) handleSettingsUsersDelete(
+	w http.ResponseWriter,
+	r *http.Request,
+) {
+	sess, ok := s.requireAdmin(w, r)
+	if !ok {
+		return
+	}
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.authCmd == nil {
+		http.Redirect(w, r, "/settings/users", http.StatusFound)
+		return
+	}
+
+	username := strings.TrimSpace(r.FormValue("username"))
+	if username == sess.Username {
+		http.Redirect(
+			w,
+			r,
+			"/settings/users?error="+url.QueryEscape(
+				"Cannot delete own account",
+			),
+			http.StatusFound,
+		)
+		return
+	}
+
+	err := s.authCmd.AdminDeleteUser(
+		r.Context(),
+		auth.AdminDeleteUserCommand{
+			AdminUsername: sess.Username,
+			Username:      username,
+		},
+	)
+	if err != nil {
+		http.Redirect(
+			w,
+			r,
+			"/settings/users?error="+url.QueryEscape(err.Error()),
+			http.StatusFound,
+		)
+		return
+	}
+
+	http.Redirect(
+		w,
+		r,
+		"/settings/users?msg="+url.QueryEscape(fmt.Sprintf(
+			"Operator %s deleted successfully",
+			username,
+		)),
+		http.StatusFound,
+	)
 }
 
 func writeJSON(w http.ResponseWriter, status int, data any) {

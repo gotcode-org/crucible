@@ -92,6 +92,71 @@
             <span>Ansible Vars</span>
           </span>
         </a>
+
+        <div
+          class="pt-2 pb-1 px-2 text-[10px] font-mono uppercase"
+        >
+          <span class="tracking-widest text-zinc-500">Security &amp; Ops</span>
+        </div>
+        <a
+          href="/settings/2fa"
+          class="flex items-center justify-between px-3 py-2 rounded-lg
+                 text-xs font-medium
+                 {{ if eq .ActiveNav "settings_2fa" }}
+                 bg-emerald-500/10 text-emerald-400 border
+                 border-emerald-500/25
+                 {{ else }}
+                 text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800/50
+                 transition-colors
+                 {{ end }}"
+        >
+          <span class="flex items-center gap-2.5">
+            <span class="font-mono text-zinc-600">08</span>
+            <span>Security &amp; 2FA</span>
+          </span>
+        </a>
+        <a
+          href="/settings/password"
+          class="flex items-center justify-between px-3 py-2 rounded-lg
+                 text-xs font-medium
+                 {{ if eq .ActiveNav "settings_password" }}
+                 bg-emerald-500/10 text-emerald-400 border
+                 border-emerald-500/25
+                 {{ else }}
+                 text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800/50
+                 transition-colors
+                 {{ end }}"
+        >
+          <span class="flex items-center gap-2.5">
+            <span class="font-mono text-zinc-600">09</span>
+            <span>Change Password</span>
+          </span>
+        </a>
+        {{ if eq .OperatorRole "admin" }}
+        <a
+          href="/settings/users"
+          class="flex items-center justify-between px-3 py-2 rounded-lg
+                 text-xs font-medium
+                 {{ if eq .ActiveNav "settings_users" }}
+                 bg-emerald-500/10 text-emerald-400 border
+                 border-emerald-500/25
+                 {{ else }}
+                 text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800/50
+                 transition-colors
+                 {{ end }}"
+        >
+          <span class="flex items-center gap-2.5">
+            <span class="font-mono text-zinc-600">10</span>
+            <span>User Management</span>
+          </span>
+          <span
+            class="text-[10px] font-mono px-1 py-0.2 rounded bg-purple-500/10
+                   text-purple-400 border border-purple-500/20"
+          >
+            ADMIN
+          </span>
+        </a>
+        {{ end }}
       </div>
 
       <!-- Runtime Diagnostics Widget -->
@@ -191,7 +256,8 @@
             <div class="py-1">
               <a
                 href="/settings/2fa"
-                class="flex items-center gap-3 px-4 py-2.5 text-xs text-zinc-300 hover:text-white hover:bg-zinc-900 transition-colors"
+                class="flex items-center gap-3 px-4 py-2 text-xs text-zinc-300
+                       hover:text-white hover:bg-zinc-900 transition-colors"
               >
                 <svg class="w-4 h-4 text-emerald-400 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
@@ -201,6 +267,62 @@
                   <div class="text-[10px] text-zinc-500 font-mono">TOTP tokens & keys</div>
                 </div>
               </a>
+              <a
+                href="/settings/password"
+                class="flex items-center gap-3 px-4 py-2 text-xs text-zinc-300
+                       hover:text-white hover:bg-zinc-900 transition-colors"
+              >
+                <svg
+                  class="w-4 h-4 text-cyan-400 shrink-0"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  stroke="currentColor"
+                >
+                  <path
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    stroke-width="2"
+                    d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2
+                       H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964
+                       A6 6 0 1121 9z"
+                  />
+                </svg>
+                <div class="min-w-0">
+                  <div class="font-medium">Change Password</div>
+                  <div class="text-[10px] text-zinc-500 font-mono">
+                    Rotate credentials
+                  </div>
+                </div>
+              </a>
+              {{ if eq .OperatorRole "admin" }}
+              <a
+                href="/settings/users"
+                class="flex items-center gap-3 px-4 py-2 text-xs text-zinc-300
+                       hover:text-white hover:bg-zinc-900 transition-colors"
+              >
+                <svg
+                  class="w-4 h-4 text-purple-400 shrink-0"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  stroke="currentColor"
+                >
+                  <path
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    stroke-width="2"
+                    d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1z
+                       m0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0
+                       018 0z"
+                  />
+                </svg>
+                <div class="min-w-0">
+                  <div class="font-medium">User Management</div>
+                  <div class="text-[10px] text-purple-400 font-mono">
+                    Administer operators
+                  </div>
+                </div>
+              </a>
+              {{ end }}
               <a
                 href="/"
                 class="flex items-center gap-3 px-4 py-2 text-xs text-zinc-300 hover:text-white hover:bg-zinc-900 transition-colors"

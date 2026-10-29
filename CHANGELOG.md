@@ -49,6 +49,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     with zero Cgo (`CGO_ENABLED=0`), RFC 6238 TOTP engine with drift tolerance,
     SVG vector and ANSI terminal QR generators, AES-256-GCM envelope
     encryption, and SQLite/in-memory persistence adapters.
+  - Password lifecycle policy and rotation engine in
+    [`internal/auth/`](./internal/auth/) and
+    [`internal/config/`](./internal/config/) supporting configurable expiry
+    intervals (days, months, years, or disabled), first-login mandates,
+    and inbound CQRS commands (`ChangePasswordCommand`,
+    `AdminCreateUserCommand`, `AdminResetPasswordCommand`,
+    `AdminUpdateUserCommand`, `AdminDeleteUserCommand`).
 - **Database Schemas & Migrations**:
   - `001_initial.sql`: Initial relational schema defining 18 core tables
     with monotonic ULID primary keys and foreign key constraints.
@@ -57,6 +64,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   - `003_audit_ledger.sql`: Append-only SHA-256 hash-chained immutable audit
     ledger protected by SQLite `BEFORE UPDATE` and `BEFORE DELETE` anti-tamper
     triggers.
+  - `005_password_lifecycle.sql`: Password lifecycle schema migration adding
+    `must_change_password` (default `1`) and `password_changed_at` columns
+    to the `users` table.
 - **Commands**:
   - Added `start` daemon subcommand to `crucibled`
     ([`cmd/crucibled/start.go`](./cmd/crucibled/start.go)) for launching the
@@ -83,7 +93,22 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     ([`cmd/cruciblectl/auth.go`](./cmd/cruciblectl/auth.go)) for operator
     credential authentication, multi-device management, and single-use
     onboarding invite generation with terminal QR codes.
+  - Added `--must-change-password` flag (default `true`) and
+    `--no-must-change-password` to `crucibled user add` and
+    `crucibled user passwd`
+    ([`cmd/crucibled/user.go`](./cmd/crucibled/user.go)).
 - **Web Console Views & Templates**:
+  - Added standalone `/settings/password?enforce=true` view
+    ([`enforce_password.html`](./web/templates/enforce_password.html))
+    providing a focused 640px card window without sidebar navigation for
+    operators required to update credentials on first login or after expiry.
+  - Added `/settings/password` self-service password update view
+    ([`settings_password.html`](./web/templates/settings_password.html))
+    within the operational workspace layout.
+  - Added `/settings/users` operator management console
+    ([`settings_users.html`](./web/templates/settings_users.html)) featuring
+    user listing, role badges, active status toggles, credential resets,
+    user deletion, and an "Add Operator" modal.
   - Added standalone Public Execution Monitor at `/`
     ([`public_dashboard.html`](./web/templates/public_dashboard.html))
     providing clean, centered pipeline visibility for unauthenticated
@@ -138,3 +163,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Fixed
 
 ### Security
+- Enforced real-time session invalidation during `ValidateSession` whenever
+  user accounts are deactivated or passwords are changed.
+- Isolated forced password rotation flow using standalone window layout
+  (`RenderStandalone`) preventing navigation bypass until compliance.
