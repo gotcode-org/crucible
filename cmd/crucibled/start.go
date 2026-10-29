@@ -19,6 +19,7 @@ import (
 	"gotcode.org/crucible/internal/config"
 	"gotcode.org/crucible/internal/server"
 	"gotcode.org/crucible/internal/storage"
+	"gotcode.org/crucible/internal/tokens"
 	"gotcode.org/crucible/internal/ui"
 	"gotcode.org/crucible/internal/version"
 )
@@ -126,6 +127,9 @@ func startCmd() *cobra.Command {
 				authStore,
 			)
 
+			tokenStore := tokens.NewSQLiteStore(engine.DB())
+			tokenSvc := tokens.NewTokenService(tokenStore)
+
 			appVersion := resolveAppVersion(ctx)
 			srv, sErr := server.NewServer(server.Config{
 				HTTPBind:       cfg.Server.HTTPBind,
@@ -137,7 +141,7 @@ func startCmd() *cobra.Command {
 				AuthProvider:   cfg.Auth.Provider,
 				Require2FA:     cfg.Auth.Require2FA,
 				PasswordPolicy: cfg.Auth.PasswordPolicy,
-			}, engine, nil, authCmd, authQuery)
+			}, engine, nil, authCmd, authQuery, tokenSvc)
 			if sErr != nil {
 				return fmt.Errorf("initializing server: %w", sErr)
 			}

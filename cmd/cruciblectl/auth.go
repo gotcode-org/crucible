@@ -172,33 +172,39 @@ func auth2FACmd() *cobra.Command {
 
 func auth2FADevicesCmd() *cobra.Command {
 	var (
-		serverURL string
-		token     string
+		socketPath string
+		serverURL  string
+		token      string
 	)
 
 	cmd := &cobra.Command{
 		Use:   "devices",
 		Short: "List enrolled 2FA devices for the active session",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			if strings.TrimSpace(token) == "" {
-				return errors.New("session token is required (--token)")
-			}
-
-			client := &http.Client{Timeout: 10 * time.Second}
-			serverURL = strings.TrimRight(serverURL, "/")
-
-			req, err := http.NewRequestWithContext(
+			transport, err := ResolveClientTransport(
 				cmd.Context(),
-				http.MethodGet,
-				serverURL+"/api/v1/auth/devices",
-				nil,
+				ClientOptions{
+					SocketPath: socketPath,
+					ServerURL:  serverURL,
+					Token:      token,
+				},
 			)
 			if err != nil {
 				return err
 			}
-			req.Header.Set("Authorization", "Bearer "+token)
 
-			resp, err := client.Do(req)
+			if !transport.IsUnixSock && transport.Token == "" {
+				return errors.New(
+					"session token is required (--token)",
+				)
+			}
+
+			resp, err := transport.Request(
+				cmd.Context(),
+				http.MethodGet,
+				"/api/v1/auth/devices",
+				nil,
+			)
 			if err != nil {
 				return fmt.Errorf("connecting to server: %w", err)
 			}
@@ -253,6 +259,12 @@ func auth2FADevicesCmd() *cobra.Command {
 		},
 	}
 
+	cmd.Flags().StringVar(
+		&socketPath,
+		"socket",
+		"",
+		"Explicit path to UNIX domain socket",
+	)
 	cmd.Flags().StringVarP(
 		&serverURL,
 		"server",
@@ -273,8 +285,9 @@ func auth2FADevicesCmd() *cobra.Command {
 
 func auth2FARevokeCmd() *cobra.Command {
 	var (
-		serverURL string
-		token     string
+		socketPath string
+		serverURL  string
+		token      string
 	)
 
 	cmd := &cobra.Command{
@@ -283,25 +296,30 @@ func auth2FARevokeCmd() *cobra.Command {
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			deviceID := args[0]
-			if strings.TrimSpace(token) == "" {
-				return errors.New("session token is required (--token)")
-			}
-
-			client := &http.Client{Timeout: 10 * time.Second}
-			serverURL = strings.TrimRight(serverURL, "/")
-
-			req, err := http.NewRequestWithContext(
+			transport, err := ResolveClientTransport(
 				cmd.Context(),
-				http.MethodDelete,
-				fmt.Sprintf("%s/api/v1/auth/devices?id=%s", serverURL, deviceID),
-				nil,
+				ClientOptions{
+					SocketPath: socketPath,
+					ServerURL:  serverURL,
+					Token:      token,
+				},
 			)
 			if err != nil {
 				return err
 			}
-			req.Header.Set("Authorization", "Bearer "+token)
 
-			resp, err := client.Do(req)
+			if !transport.IsUnixSock && transport.Token == "" {
+				return errors.New(
+					"session token is required (--token)",
+				)
+			}
+
+			resp, err := transport.Request(
+				cmd.Context(),
+				http.MethodDelete,
+				"/api/v1/auth/devices?id="+deviceID,
+				nil,
+			)
 			if err != nil {
 				return fmt.Errorf("connecting to server: %w", err)
 			}
@@ -328,6 +346,12 @@ func auth2FARevokeCmd() *cobra.Command {
 		},
 	}
 
+	cmd.Flags().StringVar(
+		&socketPath,
+		"socket",
+		"",
+		"Explicit path to UNIX domain socket",
+	)
 	cmd.Flags().StringVarP(
 		&serverURL,
 		"server",
@@ -348,22 +372,34 @@ func auth2FARevokeCmd() *cobra.Command {
 
 func auth2FAInviteCmd() *cobra.Command {
 	var (
-		serverURL string
-		token     string
-		username  string
-		label     string
+		socketPath string
+		serverURL  string
+		token      string
+		username   string
+		label      string
 	)
 
 	cmd := &cobra.Command{
 		Use:   "invite",
 		Short: "Generate a single-use 24-hour onboarding invite URL and QR code",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			if strings.TrimSpace(token) == "" {
-				return errors.New("session token is required (--token)")
+			transport, err := ResolveClientTransport(
+				cmd.Context(),
+				ClientOptions{
+					SocketPath: socketPath,
+					ServerURL:  serverURL,
+					Token:      token,
+				},
+			)
+			if err != nil {
+				return err
 			}
 
-			client := &http.Client{Timeout: 10 * time.Second}
-			serverURL = strings.TrimRight(serverURL, "/")
+			if !transport.IsUnixSock && transport.Token == "" {
+				return errors.New(
+					"session token is required (--token)",
+				)
+			}
 
 			payload, mErr := json.Marshal(map[string]string{
 				"username": username,
@@ -373,19 +409,12 @@ func auth2FAInviteCmd() *cobra.Command {
 				return fmt.Errorf("encoding invite payload: %w", mErr)
 			}
 
-			req, err := http.NewRequestWithContext(
+			resp, err := transport.Request(
 				cmd.Context(),
 				http.MethodPost,
-				serverURL+"/api/v1/auth/invite",
+				"/api/v1/auth/invite",
 				bytes.NewReader(payload),
 			)
-			if err != nil {
-				return err
-			}
-			req.Header.Set("Content-Type", "application/json")
-			req.Header.Set("Authorization", "Bearer "+token)
-
-			resp, err := client.Do(req)
 			if err != nil {
 				return fmt.Errorf("connecting to server: %w", err)
 			}
@@ -419,6 +448,12 @@ func auth2FAInviteCmd() *cobra.Command {
 		},
 	}
 
+	cmd.Flags().StringVar(
+		&socketPath,
+		"socket",
+		"",
+		"Explicit path to UNIX domain socket",
+	)
 	cmd.Flags().StringVarP(
 		&serverURL,
 		"server",

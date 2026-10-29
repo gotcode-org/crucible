@@ -15,12 +15,14 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"gotcode.org/crucible/internal/auth"
 	"gotcode.org/crucible/internal/storage"
+	"gotcode.org/crucible/internal/tokens"
 	"gotcode.org/crucible/web"
 )
 
@@ -35,6 +37,7 @@ type HTTPServer struct {
 	querySvc     storage.QueryHandler
 	authCmd      auth.CommandHandler
 	authQuery    auth.QueryHandler
+	tokenSvc     tokens.Service
 	mux          *http.ServeMux
 	tcpListener  net.Listener
 	unixListener net.Listener
@@ -57,6 +60,7 @@ func NewServer(
 	querySvc storage.QueryHandler,
 	authCmd auth.CommandHandler,
 	authQuery auth.QueryHandler,
+	tokenSvc ...tokens.Service,
 ) (*HTTPServer, error) {
 	if cfg.HTTPBind == "" {
 		cfg.HTTPBind = "127.0.0.1"
@@ -72,12 +76,21 @@ func NewServer(
 		querySvc = storage.NewQueryService(engine)
 	}
 
+	var tSvc tokens.Service
+	if len(tokenSvc) > 0 && tokenSvc[0] != nil {
+		tSvc = tokenSvc[0]
+	} else if engine != nil && engine.DB() != nil {
+		store := tokens.NewSQLiteStore(engine.DB())
+		tSvc = tokens.NewTokenService(store)
+	}
+
 	s := &HTTPServer{
 		cfg:       cfg,
 		engine:    engine,
 		querySvc:  querySvc,
 		authCmd:   authCmd,
 		authQuery: authQuery,
+		tokenSvc:  tSvc,
 		mux:       http.NewServeMux(),
 	}
 
@@ -120,8 +133,18 @@ func (s *HTTPServer) setupRoutes() error {
 		s.handleSettingsUsersRevokeDevice,
 	)
 	s.mux.HandleFunc("/settings/users/delete", s.handleSettingsUsersDelete)
+	s.mux.HandleFunc("/settings/tokens", s.handleSettingsTokens)
+	s.mux.HandleFunc(
+		"/settings/tokens/create",
+		s.handleSettingsTokensCreate,
+	)
+	s.mux.HandleFunc(
+		"/settings/tokens/revoke",
+		s.handleSettingsTokensRevoke,
+	)
 
 	// JSON API endpoints
+	s.mux.HandleFunc("/api/v1/tokens", s.handleAPITokens)
 	s.mux.HandleFunc("/api/v1/auth/login", s.handleAPILogin)
 	s.mux.HandleFunc("/api/v1/auth/verify-2fa", s.handleAPIVerify2FA)
 	s.mux.HandleFunc("/api/v1/auth/devices", s.handleAPIDevices)
@@ -277,6 +300,13 @@ func (s *HTTPServer) initHTTPServers() {
 			ReadTimeout:       15 * time.Second,
 			WriteTimeout:      30 * time.Second,
 			IdleTimeout:       60 * time.Second,
+			BaseContext: func(_ net.Listener) context.Context {
+				return context.WithValue(
+					context.Background(),
+					contextKeyIsUnixSocket,
+					true,
+				)
+			},
 		}
 	}
 }
@@ -623,28 +653,72 @@ func (s *HTTPServer) handleOperatorDashboard(
 }
 
 func (s *HTTPServer) extractSession(r *http.Request) (*auth.Session, error) {
-	if s.authQuery == nil {
-		return nil, errors.New("auth query unconfigured")
-	}
-
-	var token string
-	if cookie, err := r.Cookie(SessionCookieName); err == nil &&
-		cookie.Value != "" {
-		token = cookie.Value
-	} else if authHdr := r.Header.Get("Authorization"); strings.HasPrefix(
+	if authHdr := r.Header.Get("Authorization"); strings.HasPrefix(
 		authHdr,
 		"Bearer ",
 	) {
-		token = strings.TrimSpace(strings.TrimPrefix(authHdr, "Bearer "))
+		token := strings.TrimSpace(
+			strings.TrimPrefix(authHdr, "Bearer "),
+		)
+		if token != "" {
+			if strings.HasPrefix(token, tokens.TokenPrefix) {
+				if s.tokenSvc == nil {
+					return nil, errors.New(
+						"token service unconfigured",
+					)
+				}
+				tok, err := s.tokenSvc.ValidateToken(
+					r.Context(),
+					token,
+					r.RemoteAddr,
+				)
+				if err != nil {
+					return nil, fmt.Errorf(
+						"validating token: %w",
+						err,
+					)
+				}
+				return &auth.Session{
+					ID:       tok.ID,
+					Username: tok.Username,
+					Role:     tok.Role,
+				}, nil
+			}
+
+			if s.authQuery == nil {
+				return nil, errors.New(
+					"auth query unconfigured",
+				)
+			}
+			return s.authQuery.ValidateSession(
+				r.Context(),
+				auth.ValidateSessionQuery{SessionID: token},
+			)
+		}
 	}
 
-	if token == "" {
-		return nil, errors.New("missing session token")
+	if cookie, err := r.Cookie(SessionCookieName); err == nil &&
+		cookie.Value != "" {
+		if s.authQuery == nil {
+			return nil, errors.New("auth query unconfigured")
+		}
+		return s.authQuery.ValidateSession(
+			r.Context(),
+			auth.ValidateSessionQuery{SessionID: cookie.Value},
+		)
 	}
 
-	return s.authQuery.ValidateSession(r.Context(), auth.ValidateSessionQuery{
-		SessionID: token,
-	})
+	if isUnix, ok := r.Context().Value(
+		contextKeyIsUnixSocket,
+	).(bool); ok && isUnix {
+		return &auth.Session{
+			ID:       "local-unix-socket",
+			Username: "local-operator",
+			Role:     auth.RoleAdmin,
+		}, nil
+	}
+
+	return nil, errors.New("missing session token")
 }
 
 func (s *HTTPServer) handleLogin(w http.ResponseWriter, r *http.Request) {
@@ -2018,7 +2092,11 @@ func (s *HTTPServer) handleAPIDevices(w http.ResponseWriter, r *http.Request) {
 		}
 		w.WriteHeader(http.StatusNoContent)
 	default:
-		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		http.Error(
+			w,
+			"Method Not Allowed",
+			http.StatusMethodNotAllowed,
+		)
 	}
 }
 
@@ -2113,4 +2191,478 @@ func (s *HTTPServer) queryAppliedMigrations(
 		return nil
 	}
 	return records
+}
+
+func (s *HTTPServer) handleAPITokens(w http.ResponseWriter, r *http.Request) {
+	if s.tokenSvc == nil {
+		http.Error(
+			w,
+			"Token service unconfigured",
+			http.StatusServiceUnavailable,
+		)
+		return
+	}
+
+	sess, err := s.extractSession(r)
+	if err != nil || sess == nil {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		s.handleAPITokensGet(w, r, sess)
+	case http.MethodPost:
+		s.handleAPITokensPost(w, r, sess)
+	case http.MethodDelete:
+		s.handleAPITokensDelete(w, r, sess)
+	default:
+		http.Error(
+			w,
+			"Method Not Allowed",
+			http.StatusMethodNotAllowed,
+		)
+	}
+}
+
+func (s *HTTPServer) handleAPITokensGet(
+	w http.ResponseWriter,
+	r *http.Request,
+	sess *auth.Session,
+) {
+	targetUser := sess.Username
+	if sess.Role == auth.RoleAdmin {
+		if qUser := r.URL.Query().Get("username"); qUser != "" {
+			targetUser = qUser
+		} else if r.URL.Query().Get("all") == "true" {
+			targetUser = ""
+		}
+	}
+	toks, lErr := s.tokenSvc.ListTokens(r.Context(), targetUser)
+	if lErr != nil {
+		http.Error(w, lErr.Error(), http.StatusInternalServerError)
+		return
+	}
+	if toks == nil {
+		toks = []tokens.APIToken{}
+	}
+	writeJSON(w, http.StatusOK, toks)
+}
+
+func (s *HTTPServer) handleAPITokensPost(
+	w http.ResponseWriter,
+	r *http.Request,
+	sess *auth.Session,
+) {
+	var req struct {
+		Name      string   `json:"name"`
+		Role      string   `json:"role"`
+		Username  string   `json:"username"`
+		Scopes    []string `json:"scopes"`
+		ExpiresIn string   `json:"expires_in"`
+	}
+	if dErr := json.NewDecoder(r.Body).Decode(&req); dErr != nil {
+		http.Error(w, "Invalid JSON payload", http.StatusBadRequest)
+		return
+	}
+
+	targetUser := sess.Username
+	if req.Username != "" && sess.Role == auth.RoleAdmin {
+		targetUser = req.Username
+	}
+
+	role := auth.Role(req.Role)
+	if role == "" {
+		role = sess.Role
+	}
+	if sess.Role != auth.RoleAdmin && role == auth.RoleAdmin {
+		http.Error(
+			w,
+			"Forbidden: cannot grant admin role",
+			http.StatusForbidden,
+		)
+		return
+	}
+
+	var expiresIn time.Duration
+	if req.ExpiresIn != "" {
+		d, pErr := parseDurationCustom(req.ExpiresIn)
+		if pErr != nil {
+			http.Error(
+				w,
+				"Invalid expires_in format",
+				http.StatusBadRequest,
+			)
+			return
+		}
+		expiresIn = d
+	}
+
+	res, cErr := s.tokenSvc.CreateToken(
+		r.Context(),
+		tokens.CreateTokenCommand{
+			Name:      req.Name,
+			Role:      role,
+			Username:  targetUser,
+			Scopes:    req.Scopes,
+			ExpiresIn: expiresIn,
+		},
+	)
+	if cErr != nil {
+		http.Error(w, cErr.Error(), http.StatusBadRequest)
+		return
+	}
+
+	writeJSON(w, http.StatusCreated, res)
+}
+
+func (s *HTTPServer) handleAPITokensDelete(
+	w http.ResponseWriter,
+	r *http.Request,
+	sess *auth.Session,
+) {
+	tokenID := r.URL.Query().Get("id")
+	if tokenID == "" {
+		http.Error(w, "Missing token id", http.StatusBadRequest)
+		return
+	}
+
+	var userScope string
+	if sess.Role != auth.RoleAdmin {
+		userScope = sess.Username
+	}
+
+	if rErr := s.tokenSvc.RevokeToken(
+		r.Context(),
+		tokens.RevokeTokenCommand{
+			ID:       tokenID,
+			Username: userScope,
+		},
+	); rErr != nil {
+		if errors.Is(rErr, tokens.ErrTokenNotFound) {
+			http.Error(w, "Token not found", http.StatusNotFound)
+			return
+		}
+		http.Error(w, rErr.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *HTTPServer) handleSettingsTokens(
+	w http.ResponseWriter,
+	r *http.Request,
+) {
+	if r.Method != http.MethodGet {
+		http.Error(
+			w,
+			"Method Not Allowed",
+			http.StatusMethodNotAllowed,
+		)
+		return
+	}
+
+	sess, err := s.extractSession(r)
+	if err != nil || sess == nil {
+		http.Redirect(
+			w,
+			r,
+			"/login?next=/settings/tokens",
+			http.StatusFound,
+		)
+		return
+	}
+	if sess.MustChangePassword {
+		http.Redirect(
+			w,
+			r,
+			"/settings/password?enforce=true",
+			http.StatusFound,
+		)
+		return
+	}
+
+	s.renderSettingsTokensView(w, r, sess, nil, "", "")
+}
+
+func (s *HTTPServer) handleSettingsTokensCreate(
+	w http.ResponseWriter,
+	r *http.Request,
+) {
+	if r.Method != http.MethodPost {
+		http.Error(
+			w,
+			"Method Not Allowed",
+			http.StatusMethodNotAllowed,
+		)
+		return
+	}
+
+	sess, err := s.extractSession(r)
+	if err != nil || sess == nil {
+		http.Redirect(
+			w,
+			r,
+			"/login?next=/settings/tokens",
+			http.StatusFound,
+		)
+		return
+	}
+	if sess.MustChangePassword {
+		http.Redirect(
+			w,
+			r,
+			"/settings/password?enforce=true",
+			http.StatusFound,
+		)
+		return
+	}
+
+	name := strings.TrimSpace(r.FormValue("name"))
+	roleStr := strings.TrimSpace(r.FormValue("role"))
+	expiresInStr := strings.TrimSpace(r.FormValue("expires_in"))
+
+	if name == "" {
+		s.renderSettingsTokensView(
+			w,
+			r,
+			sess,
+			nil,
+			"",
+			"Token name is required",
+		)
+		return
+	}
+
+	role := auth.Role(roleStr)
+	if role == "" {
+		role = sess.Role
+	}
+	if sess.Role != auth.RoleAdmin && role == auth.RoleAdmin {
+		s.renderSettingsTokensView(
+			w,
+			r,
+			sess,
+			nil,
+			"",
+			"Forbidden: Operator cannot grant admin role",
+		)
+		return
+	}
+
+	var expiresIn time.Duration
+	if expiresInStr != "" {
+		d, pErr := parseDurationCustom(expiresInStr)
+		if pErr != nil {
+			s.renderSettingsTokensView(
+				w,
+				r,
+				sess,
+				nil,
+				"",
+				"Invalid expiration duration",
+			)
+			return
+		}
+		expiresIn = d
+	}
+
+	if s.tokenSvc == nil {
+		s.renderSettingsTokensView(
+			w,
+			r,
+			sess,
+			nil,
+			"",
+			"Token service unconfigured",
+		)
+		return
+	}
+
+	res, cErr := s.tokenSvc.CreateToken(
+		r.Context(),
+		tokens.CreateTokenCommand{
+			Name:      name,
+			Role:      role,
+			Username:  sess.Username,
+			ExpiresIn: expiresIn,
+		},
+	)
+	if cErr != nil {
+		s.renderSettingsTokensView(w, r, sess, nil, "", cErr.Error())
+		return
+	}
+
+	s.renderSettingsTokensView(
+		w,
+		r,
+		sess,
+		res,
+		"Personal access token generated successfully. Copy it now!",
+		"",
+	)
+}
+
+func (s *HTTPServer) handleSettingsTokensRevoke(
+	w http.ResponseWriter,
+	r *http.Request,
+) {
+	if r.Method != http.MethodPost {
+		http.Error(
+			w,
+			"Method Not Allowed",
+			http.StatusMethodNotAllowed,
+		)
+		return
+	}
+
+	sess, err := s.extractSession(r)
+	if err != nil || sess == nil {
+		http.Redirect(
+			w,
+			r,
+			"/login?next=/settings/tokens",
+			http.StatusFound,
+		)
+		return
+	}
+	if sess.MustChangePassword {
+		http.Redirect(
+			w,
+			r,
+			"/settings/password?enforce=true",
+			http.StatusFound,
+		)
+		return
+	}
+
+	tokenID := strings.TrimSpace(r.FormValue("token_id"))
+	if tokenID == "" {
+		s.renderSettingsTokensView(
+			w,
+			r,
+			sess,
+			nil,
+			"",
+			"Token ID is required for revocation",
+		)
+		return
+	}
+
+	if s.tokenSvc == nil {
+		s.renderSettingsTokensView(
+			w,
+			r,
+			sess,
+			nil,
+			"",
+			"Token service unconfigured",
+		)
+		return
+	}
+
+	var userScope string
+	if sess.Role != auth.RoleAdmin {
+		userScope = sess.Username
+	}
+
+	if rErr := s.tokenSvc.RevokeToken(
+		r.Context(),
+		tokens.RevokeTokenCommand{
+			ID:       tokenID,
+			Username: userScope,
+		},
+	); rErr != nil {
+		s.renderSettingsTokensView(w, r, sess, nil, "", rErr.Error())
+		return
+	}
+
+	s.renderSettingsTokensView(
+		w,
+		r,
+		sess,
+		nil,
+		"Token revoked successfully",
+		"",
+	)
+}
+
+func (s *HTTPServer) renderSettingsTokensView(
+	w http.ResponseWriter,
+	r *http.Request,
+	sess *auth.Session,
+	created *tokens.CreateTokenResult,
+	message string,
+	errStr string,
+) {
+	var userTokens []tokens.APIToken
+	if s.tokenSvc != nil {
+		targetUser := sess.Username
+		if sess.Role == auth.RoleAdmin {
+			targetUser = ""
+		}
+		toks, tErr := s.tokenSvc.ListTokens(r.Context(), targetUser)
+		if tErr == nil {
+			userTokens = toks
+		}
+	}
+
+	st := s.queryStorageStatus(r.Context())
+	uptimeDuration := time.Since(s.startedAt).Truncate(time.Second)
+
+	pageCtx := SettingsTokensPageContext{
+		PageContext: PageContext{
+			Title:        "Personal Access Tokens",
+			Version:      s.cfg.Version,
+			ActiveNav:    "settings_tokens",
+			Breadcrumb:   "SETTINGS / TOKENS",
+			HTTPBind:     s.cfg.HTTPBind,
+			HTTPPort:     s.effectivePort(),
+			DaemonMode:   s.cfg.DaemonMode,
+			Storage:      st,
+			OperatorUser: sess.Username,
+			OperatorRole: string(sess.Role),
+			AuthProvider: s.cfg.AuthProvider,
+			Uptime:       uptimeDuration.String(),
+			StartedAt:    s.startedAt,
+		},
+		Tokens:       userTokens,
+		CreatedToken: created,
+		Message:      message,
+		Error:        errStr,
+	}
+
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if err := web.RenderTemplate(
+		w,
+		"settings_tokens.html",
+		pageCtx,
+	); err != nil {
+		http.Error(w, "Render Error", http.StatusInternalServerError)
+	}
+}
+
+func parseDurationCustom(s string) (time.Duration, error) {
+	s = strings.TrimSpace(strings.ToLower(s))
+	if s == "" || s == "0" || s == "never" {
+		return 0, nil
+	}
+	if strings.HasSuffix(s, "d") {
+		daysStr := strings.TrimSuffix(s, "d")
+		days, err := strconv.Atoi(daysStr)
+		if err != nil || days <= 0 {
+			return 0, fmt.Errorf("invalid day duration %q", s)
+		}
+		return time.Duration(days) * 24 * time.Hour, nil
+	}
+	if strings.HasSuffix(s, "y") {
+		yearsStr := strings.TrimSuffix(s, "y")
+		years, err := strconv.Atoi(yearsStr)
+		if err != nil || years <= 0 {
+			return 0, fmt.Errorf("invalid year duration %q", s)
+		}
+		return time.Duration(years) * 365 * 24 * time.Hour, nil
+	}
+	return time.ParseDuration(s)
 }

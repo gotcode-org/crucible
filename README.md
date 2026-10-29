@@ -142,6 +142,8 @@ governance. For detailed specifications, consult the project documentation:
   specifications.
 * [`TODO.md`](./TODO.md) — Phase-by-phase implementation checklist and
   roadmap.
+* [`docs/api.md`](./docs/api.md) — HTTP REST API specifications and
+  payload schemas.
 * [`AGENTS.md`](./AGENTS.md) — Contributor guidelines, flat
   package-by-feature layout, and signed PR tag workflow.
 * [`CONTRIBUTING.md`](./CONTRIBUTING.md) — DCO requirements, SSH signing

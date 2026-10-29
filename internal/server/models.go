@@ -13,6 +13,7 @@ import (
 	"gotcode.org/crucible/internal/auth"
 	"gotcode.org/crucible/internal/config"
 	"gotcode.org/crucible/internal/storage"
+	"gotcode.org/crucible/internal/tokens"
 )
 
 // Config defines network binding, socket, and runtime parameters for the HTTP
@@ -127,6 +128,19 @@ type SettingsUsersPageContext struct {
 	InspectUser string
 	Message     string
 	Error       string
+}
+
+type contextKey string
+
+const contextKeyIsUnixSocket contextKey = "is_unix_socket"
+
+// SettingsTokensPageContext carries view model data for settings_tokens.html.
+type SettingsTokensPageContext struct {
+	PageContext
+	Tokens       []tokens.APIToken
+	CreatedToken *tokens.CreateTokenResult
+	Message      string
+	Error        string
 }
 
 // PublicDashboardContext carries view model data for standalone

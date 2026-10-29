@@ -1,0 +1,435 @@
+{{ define "content" }}
+<div class="space-y-6">
+
+  <!-- Header Banner -->
+  <div
+    class="rounded-xl bg-zinc-900/60 border border-zinc-800/80 p-6
+      flex flex-col md:flex-row items-start md:items-center
+      justify-between gap-4"
+  >
+    <div>
+      <div class="flex items-center gap-2 text-xs font-mono text-emerald-400">
+        <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+        <span>PERSONAL ACCESS TOKENS (PAT)</span>
+      </div>
+      <h1 class="text-2xl font-bold tracking-tight text-white mt-1">
+        Personal Access Tokens
+      </h1>
+      <p class="text-xs text-zinc-400 mt-1 max-w-2xl">
+        API tokens provide authenticated remote access for cruciblectl, CI/CD
+        pipelines, and external integrations over HTTP/HTTPS.
+      </p>
+    </div>
+    <div class="flex items-center gap-3">
+      <button
+        type="button"
+        id="open-add-token-modal-btn"
+        class="px-4 py-2 rounded-lg text-xs font-semibold text-zinc-950
+          bg-emerald-400 hover:bg-emerald-300 transition-colors
+          cursor-pointer shadow-lg shadow-emerald-400/20 flex
+          items-center gap-2"
+      >
+        <span class="text-sm leading-none">+</span>
+        <span>Generate New Token</span>
+      </button>
+    </div>
+  </div>
+
+  {{ if .CreatedToken }}
+  <!-- One-Time Token Reveal Card -->
+  <div
+    class="rounded-xl bg-amber-500/10 border border-amber-500/30 p-5
+      space-y-3 shadow-lg"
+  >
+    <div
+      class="flex items-center gap-2 text-amber-300 font-bold text-xs
+        font-mono uppercase tracking-wider"
+    >
+      <span>⚠️ Copy Your New Personal Access Token</span>
+    </div>
+    <p class="text-xs text-zinc-300 font-sans">
+      Make sure to copy your personal access token now. You will
+      <strong>not</strong> be able to see it again!
+    </p>
+    <div class="flex items-center gap-2 font-mono text-xs">
+      <input
+        type="text"
+        id="new-token-value"
+        readonly
+        value="{{ .CreatedToken.RawToken }}"
+        class="flex-1 bg-zinc-950/80 border border-amber-500/40 rounded-lg
+          px-3 py-2 text-emerald-400 select-all font-mono"
+      />
+      <button
+        type="button"
+        id="copy-token-btn"
+        class="px-4 py-2 bg-amber-500 hover:bg-amber-400 text-zinc-950
+          font-bold rounded-lg text-xs transition-colors cursor-pointer"
+      >
+        Copy Token
+      </button>
+    </div>
+  </div>
+  {{ end }}
+
+  {{ if .Message }}
+  <div
+    class="rounded-lg bg-emerald-500/10 border border-emerald-500/30
+      px-4 py-3 text-xs text-emerald-400 font-mono"
+  >
+    {{ .Message }}
+  </div>
+  {{ end }}
+
+  {{ if .Error }}
+  <div
+    class="rounded-lg bg-rose-500/10 border border-rose-500/30
+      px-4 py-3 text-xs text-rose-400 font-mono"
+  >
+    {{ .Error }}
+  </div>
+  {{ end }}
+
+  <!-- Tokens Table Card -->
+  <div
+    class="rounded-xl bg-zinc-900/40 border border-zinc-800/80 overflow-hidden"
+  >
+    <div
+      class="px-6 py-4 border-b border-zinc-800/80 flex items-center
+        justify-between"
+    >
+      <h2 class="text-sm font-semibold text-white">
+        Active &amp; Revoked Tokens
+      </h2>
+      <span class="text-xs font-mono text-zinc-500">
+        SHA-256 HASHED AT REST
+      </span>
+    </div>
+
+    {{ if .Tokens }}
+    <div class="overflow-x-auto">
+      <table class="w-full text-left text-xs font-mono">
+        <thead
+          class="bg-zinc-950/60 text-zinc-400 uppercase text-[10px]
+            tracking-wider border-b border-zinc-800/80"
+        >
+          <tr>
+            <th class="px-6 py-3">Token Name</th>
+            <th class="px-6 py-3">Prefix / ID</th>
+            <th class="px-6 py-3">Owner</th>
+            <th class="px-6 py-3">Role</th>
+            <th class="px-6 py-3">Created</th>
+            <th class="px-6 py-3">Expires</th>
+            <th class="px-6 py-3">Last Used</th>
+            <th class="px-6 py-3">Status</th>
+            <th class="px-6 py-3 text-right">Actions</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-zinc-800/50">
+          {{ range .Tokens }}
+          <tr class="hover:bg-zinc-800/20 transition-colors">
+            <td class="px-6 py-3 text-zinc-200 font-semibold">
+              <span class="flex items-center gap-2">
+                <span
+                  class="w-2 h-2 rounded-full
+                    {{ if eq .Status "active" }}bg-emerald-400
+                    {{ else if eq .Status "expired" }}bg-amber-400
+                    {{ else }}bg-zinc-600{{ end }}"
+                ></span>
+                <span>{{ .Name }}</span>
+              </span>
+            </td>
+            <td class="px-6 py-3 text-zinc-400">
+              <span class="bg-zinc-800/80 px-2 py-0.5 rounded text-[11px]">
+                {{ .TokenPrefix }}...
+              </span>
+            </td>
+            <td class="px-6 py-3 text-zinc-300">{{ .Username }}</td>
+            <td class="px-6 py-3">
+              <span
+                class="px-2 py-0.5 rounded text-[10px] font-mono uppercase
+                  {{ if eq .Role "admin" }}
+                  bg-purple-500/10 text-purple-400 border border-purple-500/20
+                  {{ else if eq .Role "operator" }}
+                  bg-emerald-500/10 text-emerald-400 border
+                  border-emerald-500/20
+                  {{ else }}
+                  bg-zinc-800 text-zinc-400 border border-zinc-700
+                  {{ end }}"
+              >
+                {{ .Role }}
+              </span>
+            </td>
+            <td class="px-6 py-3 text-zinc-400">
+              {{ formatTime .CreatedAt }}
+            </td>
+            <td class="px-6 py-3 text-zinc-400">
+              {{ if .ExpiresAt }}
+              {{ formatTime .ExpiresAt }}
+              {{ else }}
+              Never
+              {{ end }}
+            </td>
+            <td class="px-6 py-3 text-zinc-400">
+              {{ if .LastUsedAt }}
+              <span>{{ formatTime .LastUsedAt }}</span>
+              {{ if .LastUsedIP }}
+              <span class="text-zinc-600 text-[10px] block">
+                ({{ .LastUsedIP }})
+              </span>
+              {{ end }}
+              {{ else }}
+              Never
+              {{ end }}
+            </td>
+            <td class="px-6 py-3">
+              {{ if eq .Status "active" }}
+              <span class="text-emerald-400">ACTIVE</span>
+              {{ else if eq .Status "expired" }}
+              <span class="text-amber-400">EXPIRED</span>
+              {{ else }}
+              <span class="text-zinc-500">REVOKED</span>
+              {{ end }}
+            </td>
+            <td class="px-6 py-3 text-right">
+              {{ if eq .Status "active" }}
+              <form
+                action="/settings/tokens/revoke"
+                method="POST"
+                class="inline"
+                onsubmit="return confirm('Revoke token {{ .Name }}?');"
+              >
+                <input type="hidden" name="token_id" value="{{ .ID }}" />
+                <button
+                  type="submit"
+                  class="text-rose-400 hover:text-rose-300 hover:underline
+                    cursor-pointer"
+                >
+                  Revoke
+                </button>
+              </form>
+              {{ else }}
+              <span class="text-zinc-600">—</span>
+              {{ end }}
+            </td>
+          </tr>
+          {{ end }}
+        </tbody>
+      </table>
+    </div>
+    {{ else }}
+    <div class="p-8 text-center space-y-2">
+      <div class="text-zinc-400 text-sm">No Personal Access Tokens found.</div>
+      <div class="text-xs text-zinc-500 font-mono">
+        Generate a token above to enable remote cruciblectl access over TCP.
+      </div>
+    </div>
+    {{ end }}
+  </div>
+
+  <!-- Dual-Transport Security Model Note -->
+  <div
+    class="rounded-xl bg-zinc-900/30 border border-zinc-800/60 p-5 space-y-3"
+  >
+    <div class="flex items-center gap-2 text-xs font-mono text-zinc-400">
+      <span class="w-1.5 h-1.5 rounded-full bg-cyan-400"></span>
+      <span class="font-bold uppercase tracking-wider text-zinc-300">
+        Dual-Transport Security Architecture
+      </span>
+    </div>
+    <div
+      class="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs font-mono
+        text-zinc-400"
+    >
+      <div
+        class="p-3 bg-zinc-950/60 rounded-lg border border-zinc-800/80
+          space-y-1"
+      >
+        <div class="text-emerald-400 font-bold">Local UNIX Domain Socket</div>
+        <div class="text-zinc-300 font-sans text-xs">
+          Socket:
+          <code class="text-zinc-400">/run/crucibled/crucible.sock</code>
+          (mode 0660). Zero credentials required. Protected by POSIX
+          filesystem permissions (crucible group).
+        </div>
+      </div>
+      <div
+        class="p-3 bg-zinc-950/60 rounded-lg border border-zinc-800/80
+          space-y-1"
+      >
+        <div class="text-cyan-400 font-bold">
+          Remote TCP HTTP/HTTPS Listener
+        </div>
+        <div class="text-zinc-300 font-sans text-xs">
+          Bearer token required:
+          <code class="text-zinc-400">Authorization: Bearer cb_pat_...</code>.
+          High-entropy secrets hashed with SHA-256 at rest, with roles
+          and expiration.
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<!-- Modal Dialog: Generate Token -->
+<div
+  id="add-token-modal"
+  class="fixed inset-0 z-50 bg-zinc-950/80 backdrop-blur-sm hidden
+    flex items-center justify-center p-4"
+>
+  <div
+    class="bg-zinc-900 border border-zinc-800 rounded-xl max-w-md w-full
+      p-6 space-y-5 shadow-2xl"
+  >
+    <div class="flex items-center justify-between">
+      <h3 class="text-base font-bold text-white">
+        Generate Personal Access Token
+      </h3>
+      <button
+        type="button"
+        id="close-add-token-modal-btn"
+        class="text-zinc-400 hover:text-white text-lg font-bold cursor-pointer"
+      >
+        ✕
+      </button>
+    </div>
+
+    <form action="/settings/tokens/create" method="POST" class="space-y-4">
+      <div>
+        <label
+          for="token-name-input"
+          class="block text-xs font-mono text-zinc-400 mb-1"
+        >
+          Token Name
+        </label>
+        <input
+          type="text"
+          id="token-name-input"
+          name="name"
+          required
+          placeholder="e.g. cruciblectl-workstation, ci-pipeline"
+          class="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2
+            text-xs font-mono text-white placeholder-zinc-600
+            focus:outline-none focus:border-emerald-500"
+        />
+      </div>
+
+      <div>
+        <label
+          for="token-role-select"
+          class="block text-xs font-mono text-zinc-400 mb-1"
+        >
+          Access Role
+        </label>
+        <select
+          id="token-role-select"
+          name="role"
+          class="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2
+            text-xs font-mono text-white focus:outline-none
+            focus:border-emerald-500"
+        >
+          <option value="operator" selected>
+            Operator (read/write operations)
+          </option>
+          <option value="viewer">Viewer (read-only monitoring)</option>
+          {{ if eq .OperatorRole "admin" }}
+          <option value="admin">Admin (full administrative privileges)</option>
+          {{ end }}
+        </select>
+      </div>
+
+      <div>
+        <label
+          for="token-expires-select"
+          class="block text-xs font-mono text-zinc-400 mb-1"
+        >
+          Expiration
+        </label>
+        <select
+          id="token-expires-select"
+          name="expires_in"
+          class="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2
+            text-xs font-mono text-white focus:outline-none
+            focus:border-emerald-500"
+        >
+          <option value="720h" selected>30 days</option>
+          <option value="1440h">60 days</option>
+          <option value="2160h">90 days</option>
+          <option value="8760h">1 year</option>
+          <option value="0">No expiration</option>
+        </select>
+      </div>
+
+      <div
+        class="flex items-center justify-end gap-3 pt-3 border-t
+          border-zinc-800"
+      >
+        <button
+          type="button"
+          id="cancel-add-token-modal-btn"
+          class="px-4 py-2 rounded-lg text-xs font-medium text-zinc-400
+            hover:text-white hover:bg-zinc-800 transition-colors
+            cursor-pointer"
+        >
+          Cancel
+        </button>
+        <button
+          type="submit"
+          class="px-4 py-2 rounded-lg text-xs font-semibold text-zinc-950
+            bg-emerald-400 hover:bg-emerald-300 transition-colors
+            cursor-pointer shadow-lg shadow-emerald-400/20"
+        >
+          Generate Token
+        </button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<script>
+  (function() {
+    var modal = document.getElementById('add-token-modal');
+    var openBtn = document.getElementById('open-add-token-modal-btn');
+    var closeBtn = document.getElementById('close-add-token-modal-btn');
+    var cancelBtn = document.getElementById('cancel-add-token-modal-btn');
+    var nameInput = document.getElementById('token-name-input');
+
+    if (openBtn && modal) {
+      openBtn.addEventListener('click', function() {
+        modal.classList.remove('hidden');
+        if (nameInput) {
+          nameInput.focus();
+        }
+      });
+    }
+    if (closeBtn && modal) {
+      closeBtn.addEventListener('click', function() {
+        modal.classList.add('hidden');
+      });
+    }
+    if (cancelBtn && modal) {
+      cancelBtn.addEventListener('click', function() {
+        modal.classList.add('hidden');
+      });
+    }
+
+    var copyBtn = document.getElementById('copy-token-btn');
+    var tokenInput = document.getElementById('new-token-value');
+    if (copyBtn && tokenInput) {
+      copyBtn.addEventListener('click', function() {
+        navigator.clipboard.writeText(tokenInput.value).then(function() {
+          copyBtn.textContent = 'Copied!';
+          copyBtn.classList.remove('bg-amber-500');
+          copyBtn.classList.add('bg-emerald-400');
+          setTimeout(function() {
+            copyBtn.textContent = 'Copy Token';
+            copyBtn.classList.remove('bg-emerald-400');
+            copyBtn.classList.add('bg-amber-500');
+          }, 3000);
+        });
+      });
+    }
+  })();
+</script>
+{{ end }}

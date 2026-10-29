@@ -384,6 +384,26 @@ sharing credentials, Crucible implements a GitHub-style **Personal Access Token
 └─────────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
+### Dual Transport & Zero-Credential Local Socket Model
+
+Crucible enforces a two-tier transport security boundary:
+1. **Local UNIX Domain Socket (`/run/crucibled/crucible.sock`, mode `0660`)**:
+   * Security Boundary: Guarded by Linux kernel POSIX filesystem permissions
+     owned by `root:crucible` (or service user).
+   * Authorization: Connections arriving over the local UNIX domain socket
+     are intrinsically trusted and do not require PAT tokens or login
+     challenges, enabling frictionless local administration and root cron jobs.
+   * Client Auto-Discovery: `cruciblectl` automatically detects and prioritizes
+     the local socket if present and accessible on the filesystem.
+2. **Remote TCP / HTTPS Network Access (`http://` or `https://`)**:
+   * Security Boundary: Open network endpoints accessible across WAN or LAN.
+   * Authorization: Strictly authenticated via Personal Access Tokens (PATs)
+     passed in the `Authorization: Bearer cb_pat_...` header (or browser
+     session cookies for the web console).
+   * Enforcement: Every TCP request verifies token SHA-256 hash, revocation
+     status, expiration date, and role scopes, updating `last_used_at` and
+     `last_used_ip` telemetry.
+
 ---
 
 ## 5. Peer Replication & "Exactly-Once" Distributed Execution
@@ -3020,27 +3040,40 @@ operator CLI and an embedded Web management console.
   modal displays correct TOTP device list and `last_used_at` telemetry.
 
 #### Milestone 1-08: Personal Access Tokens Subsystem (`internal/tokens/`)
-* Define `TokenStore` outbound port in `internal/tokens/ports.go` with zero
-  database imports or SQL statements.
-* Implement `internal/storage/store_tokens.go` satisfying `TokenStore`
-  (persisting hashed tokens in SQLite `api_tokens` table).
-* Implement high-entropy token generation (`cb_pat_<32-byte-hex>`) with SHA-256
-  storage in SQLite `api_tokens` table.
-* Implement token scope validator and permission model (`admin`, `operator`,
-  `viewer`).
-* Wire Operator CLI commands (`cmd/cruciblectl/token.go`):
+* **Transport-Aware Authentication Interceptor**:
+  * Tag requests arriving over the UNIX domain socket listener with local
+    operator context, granting zero-credential access based on socket
+    filesystem permissions (`0660`).
+  * Enforce Bearer token (`Authorization: Bearer cb_pat_...`) or session
+    cookie verification on all TCP network requests.
+* **Unified Transport Client in `cruciblectl`**:
+  * Automatically detect and connect to `/run/crucibled/crucible.sock` (or
+    `./var/crucible.sock`) when `--server` is omitted, enabling seamless
+    local command execution without requiring token configuration.
+  * Support `unix:///path/to/socket` and fallback to TCP HTTP/HTTPS with
+    mandatory token authentication when targeting remote endpoints.
+* **Hexagonal Tokens Package (`internal/tokens/`)**:
+  * Define `TokenStore` outbound SPI port in `internal/tokens/ports.go`.
+  * Implement `internal/storage/store_tokens.go` in SQLite on `api_tokens`
+    table (monotonic ULID identifiers, SHA-256 storage hash, scopes JSON).
+  * High-entropy token generation (`cb_pat_<32-byte-hex>`), SHA-256 hashing,
+    and role/scope validation (`admin`, `operator`, `viewer`, `run:*`).
+  * Real-time telemetry tracking (`last_used_at`, `last_used_ip`).
+* **Operator CLI Token Commands (`cmd/cruciblectl/token.go`)**:
   * `cruciblectl token create --name <name> --role <role>` (displays plaintext
-    token exactly once with warning).
+    token exactly once with copy instructions).
   * `cruciblectl token list` (displays tabular list with ULID, name, prefix,
     role, creation date, and last used telemetry).
   * `cruciblectl token revoke <token-id>` (independent single-token
     revocation).
-* Wire Web UI view (`/settings/tokens`):
-  * Personal Access Tokens table with role badges and last-used telemetry.
+* **Web UI & Documentation (`/settings/tokens`, `docs/api.md`)**:
+  * Personal Access Tokens table in `/settings/tokens` with role badges,
+    last-used telemetry, and revocation action.
   * "Create Token" modal displaying generated plaintext with one-click copy.
-  * Revoke action button with confirmation dialog.
-* **Verification**: Generate token in Web UI, configure `cruciblectl` profile
-  with token, verify CLI commands authenticate successfully with token.
+  * Update `docs/api.md` with `/api/v1/tokens` endpoint specifications.
+* **Verification**: Verify local socket access succeeds with zero token,
+  verify TCP requests fail with 401 without token, create token via CLI and
+  Web UI, verify authentication and `last_used_at` telemetry updates.
 
 #### Milestone 1-09: Cryptographic Audit Ledger Subsystem (`internal/audit/`)
 * Define `AuditStore` outbound port in `internal/audit/ports.go` with zero

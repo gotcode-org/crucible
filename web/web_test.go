@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"gotcode.org/crucible/internal/storage"
+	"gotcode.org/crucible/internal/tokens"
 	"gotcode.org/crucible/web"
 )
 
@@ -29,6 +30,7 @@ func TestWebFS_EmbeddedAssets(t *testing.T) {
 		"templates/settings_2fa.html",
 		"templates/settings_password.html",
 		"templates/settings_users.html",
+		"templates/settings_tokens.html",
 		"static/css/style.css",
 		"static/js/app.js",
 	}
@@ -372,6 +374,72 @@ func TestRenderTemplate_SettingsUsers(t *testing.T) {
 		!strings.Contains(html, "Add New Operator") ||
 		!strings.Contains(html, "Reset Operator Password") {
 		t.Errorf("rendered settings_users missing expected content")
+	}
+}
+
+func TestRenderTemplate_SettingsTokens(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now().UTC()
+	data := map[string]any{
+		"Title":        "Personal Access Tokens",
+		"Version":      "v0.1.0",
+		"ActiveNav":    "settings_tokens",
+		"Breadcrumb":   "SETTINGS / TOKENS",
+		"HTTPBind":     "127.0.0.1",
+		"HTTPPort":     8080,
+		"DaemonMode":   "standalone",
+		"OperatorUser": "alice",
+		"OperatorRole": "admin",
+		"AuthState":    "AUTHENTICATED",
+		"Storage": &storage.Status{
+			Driver: "sqlite",
+		},
+		"CreatedToken": map[string]any{
+			"RawToken": "cb_pat_0123456789abcdef0123456789abcdef",
+		},
+		"Tokens": []tokens.APIToken{
+			{
+				ID:          "tok-1",
+				Name:        "laptop-cli",
+				TokenPrefix: "cb_pat_01234567",
+				Username:    "alice",
+				Role:        "admin",
+				CreatedAt:   now,
+				ExpiresAt:   &now,
+				Revoked:     false,
+			},
+			{
+				ID:          "tok-2",
+				Name:        "ci-worker",
+				TokenPrefix: "cb_pat_98765432",
+				Username:    "alice",
+				Role:        "operator",
+				CreatedAt:   now,
+				Revoked:     true,
+			},
+		},
+		"Message": "Token generated",
+	}
+
+	var buf bytes.Buffer
+	if err := web.RenderTemplate(
+		&buf,
+		"settings_tokens.html",
+		data,
+	); err != nil {
+		t.Fatalf("RenderTemplate settings_tokens.html failed: %v", err)
+	}
+	html := buf.String()
+	if !strings.Contains(html, "Personal Access Tokens") ||
+		!strings.Contains(html, "laptop-cli") ||
+		!strings.Contains(html, "cb_pat_0123456789abcdef") ||
+		!strings.Contains(
+			html,
+			"Dual-Transport Security Architecture",
+		) ||
+		!strings.Contains(html, "Generate New Token") {
+		t.Errorf("rendered settings_tokens missing expected content")
 	}
 }
 

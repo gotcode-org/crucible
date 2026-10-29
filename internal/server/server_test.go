@@ -21,6 +21,7 @@ import (
 	"gotcode.org/crucible/internal/config"
 	"gotcode.org/crucible/internal/server"
 	"gotcode.org/crucible/internal/storage"
+	"gotcode.org/crucible/internal/tokens"
 )
 
 func setupTestServer(
@@ -1998,5 +1999,333 @@ func testAdminUserDelete(
 	_, dErr := authStore.GetUser(context.Background(), "carol")
 	if dErr == nil {
 		t.Fatal("expected carol to be deleted from store")
+	}
+}
+
+func TestAuthWeb_SettingsTokens(t *testing.T) {
+	t.Parallel()
+	_, baseURL, _, _ := setupPasswordLifecycleServer(
+		t,
+		config.PasswordPolicyConfig{
+			RequireChangeOnFirstLogin: false,
+			MinLength:                 8,
+		},
+	)
+
+	client := &http.Client{
+		CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+
+	// 1. Unauthenticated GET /settings/tokens redirects to /login
+	unauthResp, _ := doHTTPReq(
+		t,
+		client,
+		http.MethodGet,
+		baseURL+"/settings/tokens",
+		nil,
+		"",
+	)
+	if unauthResp.StatusCode != http.StatusFound {
+		t.Fatalf(
+			"expected 302 for unauth tokens page, got %d",
+			unauthResp.StatusCode,
+		)
+	}
+	if !strings.Contains(unauthResp.Header.Get("Location"), "/login") {
+		t.Fatalf(
+			"expected redirect to /login, got %q",
+			unauthResp.Header.Get("Location"),
+		)
+	}
+
+	// 2. Login as admin
+	loginForm := url.Values{
+		"username": {"admin"},
+		"password": {"AdminPass123!"},
+	}
+	loginResp, _ := doHTTPReq(
+		t,
+		client,
+		http.MethodPost,
+		baseURL+"/login",
+		strings.NewReader(loginForm.Encode()),
+		"application/x-www-form-urlencoded",
+	)
+	if loginResp.StatusCode != http.StatusFound {
+		t.Fatalf("expected 302 login, got %d", loginResp.StatusCode)
+	}
+	adminCookie := findSessionCookie(loginResp)
+	if adminCookie == nil {
+		t.Fatal("expected admin cookie")
+	}
+
+	// 3. Authenticated GET /settings/tokens -> 200 OK
+	getResp, getBody := doHTTPReq(
+		t,
+		client,
+		http.MethodGet,
+		baseURL+"/settings/tokens",
+		nil,
+		"",
+		adminCookie,
+	)
+	if getResp.StatusCode != http.StatusOK {
+		t.Fatalf(
+			"expected 200 OK for tokens page, got %d",
+			getResp.StatusCode,
+		)
+	}
+	if !strings.Contains(getBody, "Personal Access Tokens") ||
+		!strings.Contains(
+			getBody,
+			"Dual-Transport Security Architecture",
+		) {
+		t.Fatal("expected tokens page content in body")
+	}
+
+	// 4. POST /settings/tokens/create
+	createForm := url.Values{
+		"name":       {"ci-pipeline"},
+		"role":       {"operator"},
+		"expires_in": {"720h"},
+	}
+	createResp, createBody := doHTTPReq(
+		t,
+		client,
+		http.MethodPost,
+		baseURL+"/settings/tokens/create",
+		strings.NewReader(createForm.Encode()),
+		"application/x-www-form-urlencoded",
+		adminCookie,
+	)
+	if createResp.StatusCode != http.StatusOK {
+		t.Fatalf(
+			"expected 200 OK on token create, got %d",
+			createResp.StatusCode,
+		)
+	}
+	if !strings.Contains(createBody, "cb_pat_") ||
+		!strings.Contains(
+			createBody,
+			"Copy Your New Personal Access Token",
+		) {
+		t.Fatal("expected raw token in create response body")
+	}
+}
+
+func TestAuthAPI_TokensAndDualTransport(t *testing.T) {
+	t.Parallel()
+	srv, baseURL, _, _ := setupPasswordLifecycleServer(
+		t,
+		config.PasswordPolicyConfig{
+			RequireChangeOnFirstLogin: false,
+			MinLength:                 8,
+		},
+	)
+
+	tcpClient := &http.Client{Timeout: 5 * time.Second}
+	sockPath := srv.SocketPath()
+	unixClient := &http.Client{
+		Transport: &http.Transport{
+			DialContext: func(
+				ctx context.Context,
+				_, _ string,
+			) (net.Conn, error) {
+				var d net.Dialer
+				return d.DialContext(ctx, "unix", sockPath)
+			},
+		},
+		Timeout: 5 * time.Second,
+	}
+
+	testAPIDualTransportTCPUnauth(t, tcpClient, baseURL)
+	testAPIDualTransportUnixSocket(t, unixClient)
+	rawToken, tokenID := testAPIDualTransportUnixCreate(t, unixClient)
+	testAPIDualTransportTCPBearer(t, tcpClient, baseURL, rawToken, tokenID)
+}
+
+func testAPIDualTransportTCPUnauth(
+	t *testing.T,
+	client *http.Client,
+	baseURL string,
+) {
+	t.Helper()
+	req, err := http.NewRequestWithContext(
+		context.Background(),
+		http.MethodGet,
+		baseURL+"/api/v1/tokens",
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("creating unauth request: %v", err)
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("tcp unauth request: %v", err)
+	}
+	defer closeBody(t, resp)
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf(
+			"expected 401 for unauth TCP, got %d",
+			resp.StatusCode,
+		)
+	}
+}
+
+func testAPIDualTransportUnixSocket(t *testing.T, client *http.Client) {
+	t.Helper()
+	req, err := http.NewRequestWithContext(
+		context.Background(),
+		http.MethodGet,
+		"http://unix/api/v1/tokens",
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("creating unix socket request: %v", err)
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("unix socket request: %v", err)
+	}
+	defer closeBody(t, resp)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf(
+			"expected 200 OK over socket without credentials: %d",
+			resp.StatusCode,
+		)
+	}
+}
+
+func testAPIDualTransportUnixCreate(
+	t *testing.T,
+	client *http.Client,
+) (string, string) {
+	t.Helper()
+	createPayload := strings.NewReader(`{
+		"name": "remote-workstation",
+		"role": "admin",
+		"expires_in": "720h"
+	}`)
+	req, err := http.NewRequestWithContext(
+		context.Background(),
+		http.MethodPost,
+		"http://unix/api/v1/tokens",
+		createPayload,
+	)
+	if err != nil {
+		t.Fatalf("creating unix token create request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("creating token over unix socket: %v", err)
+	}
+	defer closeBody(t, resp)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("expected 201 Created, got %d", resp.StatusCode)
+	}
+
+	var createRes tokens.CreateTokenResult
+	if dErr := json.NewDecoder(resp.Body).Decode(&createRes); dErr != nil {
+		t.Fatalf("decoding token create result: %v", dErr)
+	}
+	if !strings.HasPrefix(createRes.RawToken, "cb_pat_") {
+		t.Fatalf("expected cb_pat_ prefix, got %q", createRes.RawToken)
+	}
+	return createRes.RawToken, createRes.Token.ID
+}
+
+func testAPIDualTransportTCPBearer(
+	t *testing.T,
+	client *http.Client,
+	baseURL string,
+	rawToken string,
+	tokenID string,
+) {
+	t.Helper()
+	// 1. Authenticate over TCP using Authorization: Bearer cb_pat_...
+	authReq, err := http.NewRequestWithContext(
+		context.Background(),
+		http.MethodGet,
+		baseURL+"/api/v1/tokens",
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("creating auth TCP request: %v", err)
+	}
+	authReq.Header.Set("Authorization", "Bearer "+rawToken)
+	authResp, err := client.Do(authReq)
+	if err != nil {
+		t.Fatalf("authenticated TCP request: %v", err)
+	}
+	defer closeBody(t, authResp)
+	if authResp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 OK for bearer PAT auth, got %d",
+			authResp.StatusCode)
+	}
+
+	// 2. Access protected /operator over TCP using Bearer cb_pat_...
+	opReq, err := http.NewRequestWithContext(
+		context.Background(),
+		http.MethodGet,
+		baseURL+"/operator",
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("creating op request: %v", err)
+	}
+	opReq.Header.Set("Authorization", "Bearer "+rawToken)
+	opResp, err := client.Do(opReq)
+	if err != nil {
+		t.Fatalf("bearer auth to /operator: %v", err)
+	}
+	defer closeBody(t, opResp)
+	if opResp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 OK for /operator with PAT, got %d",
+			opResp.StatusCode)
+	}
+
+	// 3. Revoke token via DELETE /api/v1/tokens?id=... over TCP
+	delReq, err := http.NewRequestWithContext(
+		context.Background(),
+		http.MethodDelete,
+		baseURL+"/api/v1/tokens?id="+tokenID,
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("creating del request: %v", err)
+	}
+	delReq.Header.Set("Authorization", "Bearer "+rawToken)
+	delResp, err := client.Do(delReq)
+	if err != nil {
+		t.Fatalf("delete token request: %v", err)
+	}
+	defer closeBody(t, delResp)
+	if delResp.StatusCode != http.StatusNoContent {
+		t.Fatalf("expected 204 No Content for delete, got %d",
+			delResp.StatusCode)
+	}
+
+	// 4. Requesting over TCP with the revoked token must now return 401
+	revokedReq, err := http.NewRequestWithContext(
+		context.Background(),
+		http.MethodGet,
+		baseURL+"/api/v1/tokens",
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("creating revoked request: %v", err)
+	}
+	revokedReq.Header.Set("Authorization", "Bearer "+rawToken)
+	revokedResp, err := client.Do(revokedReq)
+	if err != nil {
+		t.Fatalf("revoked TCP request: %v", err)
+	}
+	defer closeBody(t, revokedResp)
+	if revokedResp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("expected 401 for revoked token, got %d",
+			revokedResp.StatusCode)
 	}
 }

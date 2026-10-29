@@ -56,6 +56,19 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     and inbound CQRS commands (`ChangePasswordCommand`,
     `AdminCreateUserCommand`, `AdminResetPasswordCommand`,
     `AdminUpdateUserCommand`, `AdminDeleteUserCommand`).
+  - Hexagonal Personal Access Tokens (PAT) Subsystem
+    ([`internal/tokens/`](./internal/tokens/)) providing cryptographic token
+    generation (`cb_pat_...`), SHA-256 hashing at rest, inbound CQRS
+    service ([`service.go`](./internal/tokens/service.go)), outbound
+    `TokenStore` SPI port ([`ports.go`](./internal/tokens/ports.go)), SQLite
+    persistence adapter on `api_tokens` table, and expiration/telemetry
+    tracking (`last_used_at`, `last_used_ip`).
+  - Dual-Transport Authorization Architecture in
+    [`internal/server/`](./internal/server/) and
+    [`cmd/cruciblectl/`](./cmd/cruciblectl/) distinguishing between local
+    UNIX domain sockets (mode `0660`, POSIX permission-governed local operator
+    authorization with zero credentials required) and remote TCP HTTP/HTTPS
+    (strictly enforcing Bearer PAT authentication).
 - **Database Schemas & Migrations**:
   - `001_initial.sql`: Initial relational schema defining 18 core tables
     with monotonic ULID primary keys and foreign key constraints.
@@ -93,6 +106,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     ([`cmd/cruciblectl/auth.go`](./cmd/cruciblectl/auth.go)) for operator
     credential authentication, multi-device management, and single-use
     onboarding invite generation with terminal QR codes.
+  - Added `token create`, `token list`, and `token revoke` subcommands to
+    `cruciblectl` ([`cmd/cruciblectl/token.go`](./cmd/cruciblectl/token.go))
+    with formatted tables, custom expiration parsing, and one-time secret
+    reveal banners.
+  - Implemented unified client transport helper in `cruciblectl`
+    ([`cmd/cruciblectl/client.go`](./cmd/cruciblectl/client.go)) providing
+    transparent auto-discovery of local UNIX domain sockets
+    (`/run/crucibled/crucible.sock`, `./var/crucible.sock`), connection
+    profile resolution, and seamless dual-transport switching.
   - Added `--must-change-password` flag (default `true`) and
     `--no-must-change-password` to `crucibled user add` and
     `crucibled user passwd`
@@ -118,6 +140,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     ([`settings_users.html`](./web/templates/settings_users.html)) featuring
     user listing, role badges, active status toggles, credential resets,
     user deletion, and an "Add Operator" modal.
+  - Added `/settings/tokens` personal access token management view
+    ([`settings_tokens.html`](./web/templates/settings_tokens.html))
+    featuring token listings, role and status badges, token generation modal,
+    one-click clipboard copy with one-time reveal card, revocation actions,
+    and a dual-transport architectural reference card.
+  - Added `Personal Tokens` navigation item (`12`) under the `User` sidebar
+    group in [`base.html`](./web/templates/base.html) and in the operator
+    profile dropdown menu.
   - Added standalone Public Execution Monitor at `/`
     ([`public_dashboard.html`](./web/templates/public_dashboard.html))
     providing clean, centered pipeline visibility for unauthenticated
@@ -129,6 +159,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   - Added `/settings/2fa` multi-device security management dashboard with
     device revocation, registration modals, and invite issuance.
 - **Repository Architecture & Governance**:
+  - Comprehensive REST API specification ([`docs/api.md`](./docs/api.md))
+    documenting transport semantics, headers, health checks, authentication,
+    multi-device 2FA, and Personal Access Tokens endpoints.
   - Technical blueprint specifications ([`PLAN.md`](./PLAN.md),
     [`ARCHITECTURE.md`](./ARCHITECTURE.md)).
   - Contributor and AI agent guidelines with strict commit and signing

@@ -150,17 +150,25 @@ Format: `[state] (Priority) [domain/binary] Task description @assignee +tag`
 - [ ] (B) [crucibled] Add rootless service account (User=crucible) vs PAM
       (User=root) profiles to systemd unit command @jovens@gotcode.org +phase1
       +crucibled +systemd
-- [ ] (A) [tokens] Define TokenStore outbound port in internal/tokens/ports.go
-      and implement internal/storage/store_tokens.go in SQLite
+- [x] (A) [server] Implement transport-aware auth interceptor (granting local
+      operator trust on UNIX domain socket, enforcing PAT Bearer tokens on TCP)
+      @jovens@gotcode.org +phase1 +server +security
+- [x] (A) [cruciblectl] Implement unified transport client with auto-discovery
+      of local UNIX domain socket and TCP remote fallback @jovens@gotcode.org
+      +phase1 +cruciblectl +transport
+- [x] (A) [tokens] Define TokenStore outbound port in internal/tokens/ports.go
+      and implement internal/tokens/adapter_sqlite.go on api_tokens
       @jovens@gotcode.org +phase1 +tokens +storage
-- [ ] (A) [tokens] Implement internal/tokens package with high-entropy token
-      generator, SHA-256 hashing, and scope validator @jovens@gotcode.org
-      +phase1 +tokens +security
-- [ ] (A) [cruciblectl] Implement cruciblectl token create, list, and revoke
-      commands with Lip Gloss table formatting @jovens@gotcode.org +phase1
+- [x] (A) [tokens] Implement internal/tokens package with high-entropy token
+      generator (cb_pat_...), SHA-256 hashing, and scope validator
+      @jovens@gotcode.org +phase1 +tokens +security
+- [x] (A) [cruciblectl] Implement cruciblectl token create, list, and revoke
+      commands with table formatting @jovens@gotcode.org +phase1
       +cruciblectl +tokens
-- [ ] (B) [web] Implement Web UI /settings/tokens view for token creation,
+- [x] (B) [web] Implement Web UI /settings/tokens view for token creation,
       one-click copy, and revocation @jovens@gotcode.org +phase1 +web +tokens
+- [x] (B) [docs] Document /api/v1/tokens REST endpoints in docs/api.md
+      @jovens@gotcode.org +phase1 +docs
 - [ ] (A) [audit] Define AuditStore outbound port in internal/audit/ports.go
       and implement internal/storage/store_audit.go in SQLite
       @jovens@gotcode.org +phase1 +audit +storage
