@@ -129,6 +129,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     administrators to inspect and edit roles, active status, and password
     change flags, view password lifecycle telemetry, inspect registered TOTP
     2FA devices with `last_used_at` timestamps, and revoke devices.
+  - Added standalone First-Boot Setup Wizard at `/setup`
+    ([`setup.html`](./web/templates/setup.html)) enabling automatic
+    initialization of the primary root administrator account on fresh installs
+    with a strict single-run activation barrier preventing re-execution.
   - Added standalone `/settings/password?enforce=true` view
     ([`enforce_password.html`](./web/templates/enforce_password.html))
     providing a focused 640px card window without sidebar navigation for

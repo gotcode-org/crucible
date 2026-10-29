@@ -37,6 +37,19 @@ func NewQueryService(
 	}
 }
 
+// NeedsSetup reports whether the installation requires first-boot setup.
+// Returns true only when a userStore is configured and has zero users.
+func (q *QueryService) NeedsSetup(ctx context.Context) (bool, error) {
+	if q.userStore == nil {
+		return false, nil
+	}
+	count, err := q.userStore.CountUsers(ctx)
+	if err != nil {
+		return false, err
+	}
+	return count == 0, nil
+}
+
 // ValidateSession inspects a session token and verifies it has not expired.
 func (q *QueryService) ValidateSession(
 	ctx context.Context,

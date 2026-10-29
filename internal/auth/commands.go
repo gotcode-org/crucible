@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"sync"
 	"time"
 
 	"gotcode.org/crucible/internal/id"
@@ -37,6 +38,7 @@ type CommandService struct {
 	userStore        UserStore
 	crypter          SecretCrypter
 	restrictToGroups bool
+	setupMu          sync.Mutex
 }
 
 // NewCommandService constructs a fresh CommandService wired with outbound SPI
@@ -613,6 +615,90 @@ func (s *CommandService) AdminDeleteUser(
 	}
 
 	return s.userStore.DeleteUser(ctx, cmd.Username)
+}
+
+// InitialSetup provisions the initial administrator account during first boot.
+// It enforces a strict single-run barrier: if any users already exist in
+// the user store, it immediately aborts with ErrSetupCompleted.
+func (s *CommandService) InitialSetup(
+	ctx context.Context,
+	cmd InitialSetupCommand,
+) (*Session, error) {
+	if s.userStore == nil {
+		return nil, errors.New("user store unconfigured")
+	}
+
+	s.setupMu.Lock()
+	defer s.setupMu.Unlock()
+
+	// 1. Strict single-run guard
+	count, err := s.userStore.CountUsers(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("checking user count: %w", err)
+	}
+	if count > 0 {
+		return nil, ErrSetupCompleted
+	}
+
+	// 2. Validate username
+	username := strings.TrimSpace(cmd.Username)
+	if username == "" {
+		username = "admin"
+	}
+	if !validUsernameRe.MatchString(username) {
+		return nil, errors.New("invalid username format")
+	}
+
+	// 3. Validate password & confirm password
+	if cmd.Password == "" {
+		return nil, errors.New("password is required")
+	}
+	if cmd.ConfirmPassword != "" && cmd.Password != cmd.ConfirmPassword {
+		return nil, errors.New("passwords do not match")
+	}
+	minLen := cmd.MinLength
+	if minLen <= 0 {
+		minLen = 8
+	}
+	if len(cmd.Password) < minLen {
+		return nil, ErrPasswordTooShort
+	}
+
+	// 4. Hash password with pure Go Argon2id
+	hash, hErr := HashPassword(cmd.Password)
+	if hErr != nil {
+		return nil, fmt.Errorf("hashing password: %w", hErr)
+	}
+
+	now := time.Now().UTC()
+	u := &User{
+		Username:           username,
+		PasswordHash:       &hash,
+		Role:               RoleAdmin,
+		IsActive:           true,
+		MustChangePassword: false,
+		PasswordChangedAt:  now,
+		CreatedAt:          now,
+	}
+
+	if cErr := s.userStore.CreateUser(ctx, u); cErr != nil {
+		return nil, cErr
+	}
+
+	// 5. Create active administrator session
+	sess := &Session{
+		ID:                 id.NewSessionID(),
+		Username:           username,
+		Role:               RoleAdmin,
+		MustChangePassword: false,
+		CreatedAt:          now,
+		ExpiresAt:          now.Add(SessionTTL),
+	}
+	if sErr := s.sessionStore.CreateSession(ctx, sess); sErr != nil {
+		return nil, fmt.Errorf("creating admin session: %w", sErr)
+	}
+
+	return sess, nil
 }
 
 func generateSecureToken(byteLen int) (string, error) {

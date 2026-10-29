@@ -1,0 +1,283 @@
+<!DOCTYPE html>
+<html lang="en" class="h-full dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>First-Boot Setup — Crucible Ops</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link
+    href="https://fonts.googleapis.com/css2?family=JetBrains+Mono&display=swap"
+    rel="stylesheet"
+  />
+  <link rel="stylesheet" href="/static/css/style.css" />
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ['"Plus Jakarta Sans"', 'sans-serif'],
+            mono: ['"JetBrains Mono"', 'monospace'],
+          },
+        },
+      },
+    }
+  </script>
+</head>
+<body
+  class="bg-zinc-950 text-zinc-100 min-h-full grid lg:grid-cols-12
+         antialiased selection:bg-emerald-500/30 selection:text-emerald-200"
+>
+
+  <!-- Left Panel: Telemetry & First-Boot Initialization Showcase -->
+  <aside
+    class="hidden lg:flex lg:col-span-7 relative bg-zinc-900/40 border-r
+           border-zinc-800/80 flex-col justify-between p-12 overflow-hidden
+           bg-grid"
+  >
+    <div
+      class="absolute -top-24 -left-24 w-[480px] h-[480px]
+             bg-emerald-500/10 rounded-full blur-[130px]
+             pointer-events-none"
+    ></div>
+    <div
+      class="absolute bottom-0 right-0 w-[420px] h-[420px] bg-cyan-500/10
+             rounded-full blur-[130px] pointer-events-none"
+    ></div>
+
+    <!-- Top Brand Bar -->
+    <div class="relative z-10 flex items-center justify-between">
+      <div class="flex items-center gap-3">
+        <div
+          class="w-9 h-9 rounded-lg bg-emerald-500/10 border
+                 border-emerald-500/40 flex items-center justify-center
+                 text-emerald-400 font-mono font-bold shadow-lg
+                 shadow-emerald-950/50"
+        >
+          &gt;_
+        </div>
+        <div>
+          <span class="font-bold tracking-tight text-white text-base">
+            CRUCIBLE
+          </span>
+          <span
+            class="ml-1.5 text-[10px] font-mono uppercase px-1.5 py-0.5
+                   rounded bg-zinc-800 text-emerald-400 border
+                   border-zinc-700"
+          >
+            OPS {{ .Version }}
+          </span>
+        </div>
+      </div>
+      <div class="flex items-center gap-2 text-xs font-mono text-zinc-400">
+        <span class="w-2 h-2 rounded-full bg-amber-400 animate-pulse"></span>
+        FIRST-BOOT SETUP REQUIRED
+      </div>
+    </div>
+
+    <!-- Center Terminal Telemetry Preview -->
+    <div class="relative z-10 max-w-xl space-y-6 my-auto">
+      <div
+        class="inline-flex items-center gap-2 px-3 py-1 rounded-md
+               bg-amber-500/10 border border-amber-500/20 text-amber-400
+               text-xs font-mono"
+      >
+        <span>// INITIAL SYSTEM PROVISIONING</span>
+      </div>
+      <h2
+        class="text-4xl font-extrabold tracking-tight text-white
+               leading-tight"
+      >
+        Bootstrap system authority and secure the control plane.
+      </h2>
+      <p class="text-zinc-400 text-sm leading-relaxed">
+        Crucible detected a fresh deployment with zero registered accounts.
+        Provision the primary system administrator account to initialize
+        access control and unlock the management dashboard.
+      </p>
+
+      <div
+        class="rounded-xl bg-zinc-950/90 border border-zinc-800/90 p-4
+               font-mono text-xs space-y-2.5 shadow-2xl"
+      >
+        <div
+          class="flex items-center justify-between text-zinc-500 border-b
+                 border-zinc-800/80 pb-2"
+        >
+          <span>SECURITY BARRIER</span>
+          <span class="text-amber-400">SINGLE-RUN ONLY</span>
+        </div>
+        <div class="flex items-center justify-between">
+          <span class="text-zinc-400">Access Control</span>
+          <span class="text-emerald-400">&#9679; Admin Role Granted</span>
+        </div>
+        <div class="flex items-center justify-between">
+          <span class="text-zinc-400">Password Hashing</span>
+          <span class="text-emerald-400">&#9679; Pure Go Argon2id</span>
+        </div>
+        <div class="flex items-center justify-between">
+          <span class="text-zinc-400">Persistence</span>
+          <span class="text-cyan-400">&#9679; ModernC SQLite WAL</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Bottom Metadata -->
+    <div
+      class="relative z-10 flex items-center justify-between text-xs
+             font-mono text-zinc-500"
+    >
+      <span>&copy; 2026 The GotCode Collective</span>
+      <span>CRUCIBLE FIRST-BOOT WIZARD</span>
+    </div>
+  </aside>
+
+  <!-- Right Panel: Setup Console -->
+  <main
+    class="lg:col-span-5 flex flex-col justify-center px-6 py-12 sm:px-12
+           xl:px-16 bg-zinc-950 relative"
+  >
+    <div class="w-full max-w-sm mx-auto space-y-8">
+
+      <!-- Mobile Brand Header -->
+      <div class="lg:hidden flex items-center gap-3 mb-2">
+        <div
+          class="w-8 h-8 rounded-lg bg-emerald-500/10 border
+                 border-emerald-500/40 flex items-center justify-center
+                 text-emerald-400 font-mono font-bold"
+        >
+          &gt;_
+        </div>
+        <span class="font-bold tracking-tight text-white">CRUCIBLE OPS</span>
+      </div>
+
+      <div>
+        <div
+          class="text-xs font-mono uppercase tracking-widest text-amber-400
+                 mb-1"
+        >
+          Initialization &mdash; Step 01 / 01
+        </div>
+        <h1 class="text-2xl font-bold tracking-tight text-white">
+          Create Admin Account
+        </h1>
+        <p class="text-zinc-400 text-sm mt-1">
+          Configure credentials for the primary root administrator.
+        </p>
+      </div>
+
+      {{ if .Error }}
+      <div
+        class="rounded-lg bg-rose-500/10 border border-rose-500/30 px-3.5
+               py-2.5 text-xs text-rose-400 font-mono"
+      >
+        {{ .Error }}
+      </div>
+      {{ end }}
+
+      <form action="/setup" method="POST" class="space-y-5">
+        <div class="space-y-1.5">
+          <label
+            for="username"
+            class="block text-xs font-mono uppercase tracking-wider
+                   text-zinc-400"
+          >
+            Admin Username
+          </label>
+          <input
+            type="text"
+            id="username"
+            name="username"
+            value="{{ if .DefaultUsername }}{{ .DefaultUsername }}{{ else
+            }}admin{{ end }}"
+            required
+            autofocus
+            autocomplete="username"
+            placeholder="admin"
+            class="w-full px-3.5 py-2.5 text-sm font-mono bg-zinc-900/90
+                   focus:bg-zinc-900 border border-zinc-800
+                   focus:border-emerald-500 focus:ring-1
+                   focus:ring-emerald-500/40 rounded-lg text-zinc-100
+                   placeholder-zinc-600 outline-none transition-all"
+          />
+        </div>
+
+        <div class="space-y-1.5">
+          <label
+            for="password"
+            class="block text-xs font-mono uppercase tracking-wider
+                   text-zinc-400"
+          >
+            Master Password
+          </label>
+          <input
+            type="password"
+            id="password"
+            name="password"
+            required
+            autocomplete="new-password"
+            placeholder="••••••••••••"
+            minlength="{{ if gt .MinPasswordLength 0 }}{{
+            .MinPasswordLength }}{{ else }}8{{ end }}"
+            class="w-full px-3.5 py-2.5 text-sm font-mono bg-zinc-900/90
+                   focus:bg-zinc-900 border border-zinc-800
+                   focus:border-emerald-500 focus:ring-1
+                   focus:ring-emerald-500/40 rounded-lg text-zinc-100
+                   placeholder-zinc-600 outline-none transition-all"
+          />
+          <p class="text-[11px] font-mono text-zinc-500">
+            Must be at least {{ if gt .MinPasswordLength 0 }}{{
+            .MinPasswordLength }}{{ else }}8{{ end }} characters.
+          </p>
+        </div>
+
+        <div class="space-y-1.5">
+          <label
+            for="confirm_password"
+            class="block text-xs font-mono uppercase tracking-wider
+                   text-zinc-400"
+          >
+            Confirm Password
+          </label>
+          <input
+            type="password"
+            id="confirm_password"
+            name="confirm_password"
+            required
+            autocomplete="new-password"
+            placeholder="••••••••••••"
+            class="w-full px-3.5 py-2.5 text-sm font-mono bg-zinc-900/90
+                   focus:bg-zinc-900 border border-zinc-800
+                   focus:border-emerald-500 focus:ring-1
+                   focus:ring-emerald-500/40 rounded-lg text-zinc-100
+                   placeholder-zinc-600 outline-none transition-all"
+          />
+        </div>
+
+        <button
+          type="submit"
+          class="w-full py-2.5 px-4 rounded-lg text-sm font-semibold
+                 text-zinc-950 bg-gradient-to-r from-emerald-400
+                 to-cyan-400 hover:from-emerald-300 hover:to-cyan-300
+                 shadow-lg shadow-emerald-500/15 transition-all
+                 active:scale-[0.99] flex items-center justify-center gap-2
+                 cursor-pointer"
+        >
+          <span>Complete Setup & Initialize</span>
+          <span class="font-mono">&rarr;</span>
+        </button>
+      </form>
+
+      <div
+        class="pt-6 border-t border-zinc-900 flex items-center
+               justify-between text-xs font-mono text-zinc-500"
+      >
+        <span>SECURITY BARRIER</span>
+        <span class="text-amber-400">&#9679; SINGLE-RUN ACTIVATION</span>
+      </div>
+    </div>
+  </main>
+
+</body>
+</html>

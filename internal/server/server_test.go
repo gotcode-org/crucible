@@ -2329,3 +2329,341 @@ func testAPIDualTransportTCPBearer(
 			revokedResp.StatusCode)
 	}
 }
+
+func setupFreshServerWithoutUsers(
+	t *testing.T,
+	policy config.PasswordPolicyConfig,
+) (*server.HTTPServer, string, *auth.SQLiteStore) {
+	t.Helper()
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "fresh.db")
+	sockPath := filepath.Join(dir, "fresh.sock")
+
+	engine, err := storage.NewSQLiteAdapter(
+		context.Background(),
+		config.StorageConfig{
+			DatabasePath:  dbPath,
+			WALMode:       false,
+			BusyTimeoutMs: 5000,
+		},
+	)
+	if err != nil {
+		t.Fatalf("opening sqlite engine: %v", err)
+	}
+
+	if mErr := engine.Migrate(context.Background()); mErr != nil {
+		t.Fatalf("running initial migration: %v", mErr)
+	}
+
+	authStore := auth.NewSQLiteStore(engine.DB())
+	expiry, pErr := policy.ExpiryDuration()
+	if pErr != nil {
+		t.Fatalf("parsing policy duration: %v", pErr)
+	}
+	sqliteAuth := auth.NewSQLiteAuthenticator(
+		authStore,
+	).WithPasswordExpiry(expiry)
+
+	crypter := auth.NewPlaintextCrypter()
+	cmdSvc := auth.NewCommandService(
+		sqliteAuth,
+		authStore,
+		authStore,
+		authStore,
+		authStore,
+		authStore,
+		crypter,
+		false,
+	)
+	querySvc := auth.NewQueryService(
+		authStore,
+		authStore,
+		authStore,
+		authStore,
+	)
+
+	srv, err := server.NewServer(server.Config{
+		HTTPBind:       "127.0.0.1",
+		HTTPPort:       0,
+		SocketPath:     sockPath,
+		DaemonMode:     "standalone",
+		Version:        "v0.1.0-setuptest",
+		PasswordPolicy: policy,
+	}, engine, nil, cmdSvc, querySvc)
+	if err != nil {
+		t.Fatalf("creating server: %v", err)
+	}
+
+	if sErr := srv.Start(context.Background()); sErr != nil {
+		t.Fatalf("starting server: %v", sErr)
+	}
+
+	t.Cleanup(func() {
+		if cErr := srv.Shutdown(context.Background()); cErr != nil {
+			t.Logf("shutdown server: %v", cErr)
+		}
+		if cErr := engine.Close(); cErr != nil {
+			t.Logf("close engine: %v", cErr)
+		}
+	})
+
+	return srv, "http://" + srv.HTTPAddr(), authStore
+}
+
+func TestAuthWeb_FirstBootSetup_Redirects(t *testing.T) {
+	t.Parallel()
+	_, baseURL, _ := setupFreshServerWithoutUsers(
+		t,
+		config.PasswordPolicyConfig{MinLength: 8},
+	)
+
+	client := &http.Client{
+		CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+
+	// 1. Fresh install: GET / redirects to /setup
+	resp, _ := doHTTPReq(t, client, http.MethodGet, baseURL+"/", nil, "")
+	if resp.StatusCode != http.StatusFound ||
+		resp.Header.Get("Location") != "/setup" {
+		t.Fatalf(
+			"expected redirect to /setup from /, got %d loc %q",
+			resp.StatusCode,
+			resp.Header.Get("Location"),
+		)
+	}
+
+	// 2. Fresh install: GET /login redirects to /setup
+	resp, _ = doHTTPReq(t, client, http.MethodGet, baseURL+"/login", nil, "")
+	if resp.StatusCode != http.StatusFound ||
+		resp.Header.Get("Location") != "/setup" {
+		t.Fatalf(
+			"expected redirect to /setup from /login, got %d loc %q",
+			resp.StatusCode,
+			resp.Header.Get("Location"),
+		)
+	}
+
+	// 3. Fresh install: GET /operator redirects to /setup
+	resp, _ = doHTTPReq(
+		t,
+		client,
+		http.MethodGet,
+		baseURL+"/operator",
+		nil,
+		"",
+	)
+	if resp.StatusCode != http.StatusFound ||
+		resp.Header.Get("Location") != "/setup" {
+		t.Fatalf(
+			"expected redirect to /setup from /operator, got %d loc %q",
+			resp.StatusCode,
+			resp.Header.Get("Location"),
+		)
+	}
+
+	// 4. GET /setup renders setup page (200 OK)
+	resp, body := doHTTPReq(
+		t,
+		client,
+		http.MethodGet,
+		baseURL+"/setup",
+		nil,
+		"",
+	)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 on /setup, got %d", resp.StatusCode)
+	}
+	if !strings.Contains(body, "Create Admin Account") ||
+		!strings.Contains(body, "SINGLE-RUN ONLY") {
+		t.Fatalf("expected setup page content in body")
+	}
+}
+
+func TestAuthWeb_FirstBootSetup_WebSubmissionAndBarrier(t *testing.T) {
+	t.Parallel()
+	_, baseURL, authStore := setupFreshServerWithoutUsers(
+		t,
+		config.PasswordPolicyConfig{MinLength: 8},
+	)
+
+	client := &http.Client{
+		CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+
+	// 1. POST /setup with validation error (password mismatch)
+	badForm := url.Values{
+		"username":         {"admin"},
+		"password":         {"Pass123456!"},
+		"confirm_password": {"DifferentPass123!"},
+	}
+	resp, body := doHTTPReq(
+		t,
+		client,
+		http.MethodPost,
+		baseURL+"/setup",
+		strings.NewReader(badForm.Encode()),
+		"application/x-www-form-urlencoded",
+	)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400 on password mismatch, got %d", resp.StatusCode)
+	}
+	if !strings.Contains(body, "passwords do not match") {
+		t.Fatalf("expected error message in body, got: %s", body)
+	}
+
+	// 2. Successful POST /setup
+	goodForm := url.Values{
+		"username":         {"sysadmin"},
+		"password":         {"SuperSecret123!"},
+		"confirm_password": {"SuperSecret123!"},
+	}
+	resp, _ = doHTTPReq(
+		t,
+		client,
+		http.MethodPost,
+		baseURL+"/setup",
+		strings.NewReader(goodForm.Encode()),
+		"application/x-www-form-urlencoded",
+	)
+	if resp.StatusCode != http.StatusFound {
+		t.Fatalf("expected 302 after setup, got %d", resp.StatusCode)
+	}
+	if resp.Header.Get("Location") != "/operator" {
+		t.Fatalf(
+			"expected redirect to /operator, got %q",
+			resp.Header.Get("Location"),
+		)
+	}
+	adminCookie := findSessionCookie(resp)
+	if adminCookie == nil {
+		t.Fatal("expected session cookie after setup")
+	}
+
+	// 3. Single-run barrier: subsequent GET /setup redirects to /login
+	resp, _ = doHTTPReq(t, client, http.MethodGet, baseURL+"/setup", nil, "")
+	if resp.StatusCode != http.StatusFound ||
+		resp.Header.Get("Location") != "/login" {
+		t.Fatalf(
+			"expected redirect to /login for completed setup, got %d loc %q",
+			resp.StatusCode,
+			resp.Header.Get("Location"),
+		)
+	}
+
+	// 4. Single-run barrier: subsequent POST /setup returns 403 Forbidden
+	resp, _ = doHTTPReq(
+		t,
+		client,
+		http.MethodPost,
+		baseURL+"/setup",
+		strings.NewReader(goodForm.Encode()),
+		"application/x-www-form-urlencoded",
+	)
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf(
+			"expected 403 Forbidden on second setup POST, got %d",
+			resp.StatusCode,
+		)
+	}
+
+	// 5. Verify user in DB
+	count, cErr := authStore.CountUsers(context.Background())
+	if cErr != nil || count != 1 {
+		t.Fatalf(
+			"expected exactly 1 user in db, got %d (err: %v)",
+			count,
+			cErr,
+		)
+	}
+}
+
+func TestAuthWeb_FirstBootSetup_APISetupAndBarrier(t *testing.T) {
+	t.Parallel()
+	_, baseURL, authStore := setupFreshServerWithoutUsers(
+		t,
+		config.PasswordPolicyConfig{MinLength: 8},
+	)
+
+	client := &http.Client{
+		CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+
+	// 1. GET /api/v1/setup returns needs_setup: true
+	resp, body := doHTTPReq(
+		t,
+		client,
+		http.MethodGet,
+		baseURL+"/api/v1/setup",
+		nil,
+		"",
+	)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 on /api/v1/setup, got %d", resp.StatusCode)
+	}
+	if !strings.Contains(body, `"needs_setup":true`) {
+		t.Fatalf("expected needs_setup:true in body, got: %s", body)
+	}
+
+	// 2. Successful POST /api/v1/setup
+	setupJSON := `{"username":"apiadmin","password":"SuperSecret123!",` +
+		`"confirm_password":"SuperSecret123!"}`
+	resp, _ = doHTTPReq(
+		t,
+		client,
+		http.MethodPost,
+		baseURL+"/api/v1/setup",
+		strings.NewReader(setupJSON),
+		"application/json",
+	)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("expected 201 on API setup, got %d", resp.StatusCode)
+	}
+
+	// 3. GET /api/v1/setup returns needs_setup: false
+	resp, body = doHTTPReq(
+		t,
+		client,
+		http.MethodGet,
+		baseURL+"/api/v1/setup",
+		nil,
+		"",
+	)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 on /api/v1/setup, got %d", resp.StatusCode)
+	}
+	if !strings.Contains(body, `"needs_setup":false`) {
+		t.Fatalf("expected needs_setup:false in body, got: %s", body)
+	}
+
+	// 4. Subsequent POST /api/v1/setup returns 403 Forbidden
+	resp, _ = doHTTPReq(
+		t,
+		client,
+		http.MethodPost,
+		baseURL+"/api/v1/setup",
+		strings.NewReader(`{"username":"hacker","password":"Password123!"}`),
+		"application/json",
+	)
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf(
+			"expected 403 on API setup after completion, got %d",
+			resp.StatusCode,
+		)
+	}
+
+	// 5. Verify user in DB
+	count, cErr := authStore.CountUsers(context.Background())
+	if cErr != nil || count != 1 {
+		t.Fatalf(
+			"expected exactly 1 user in db, got %d (err: %v)",
+			count,
+			cErr,
+		)
+	}
+}

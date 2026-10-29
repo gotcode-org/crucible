@@ -216,6 +216,14 @@ type ChangePasswordCommand struct {
 	MinLength       int
 }
 
+// InitialSetupCommand carries parameters for the first-boot setup wizard.
+type InitialSetupCommand struct {
+	Username        string
+	Password        string
+	ConfirmPassword string
+	MinLength       int
+}
+
 // AdminCreateUserCommand carries parameters for admin user provisioning.
 type AdminCreateUserCommand struct {
 	AdminUsername      string
@@ -286,5 +294,8 @@ var (
 	)
 	ErrCannotDemoteSelf = errors.New(
 		"cannot demote currently authenticated admin account",
+	)
+	ErrSetupCompleted = errors.New(
+		"setup has already been completed",
 	)
 )

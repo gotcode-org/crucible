@@ -153,11 +153,20 @@ type CommandHandler interface {
 
 	// AdminDeleteUser removes a user account from the system.
 	AdminDeleteUser(ctx context.Context, cmd AdminDeleteUserCommand) error
+
+	// InitialSetup provisions the initial administrator during first boot.
+	InitialSetup(
+		ctx context.Context,
+		cmd InitialSetupCommand,
+	) (*Session, error)
 }
 
 // QueryHandler defines the inbound hexagonal port for read-only queries
 // in the authentication subsystem.
 type QueryHandler interface {
+	// NeedsSetup reports whether the installation requires first-boot setup.
+	NeedsSetup(ctx context.Context) (bool, error)
+
 	// ValidateSession inspects a session token and verifies it has not expired.
 	ValidateSession(ctx context.Context, q ValidateSessionQuery) (*Session, error)
 

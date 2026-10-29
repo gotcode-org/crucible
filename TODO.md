@@ -145,8 +145,9 @@ Format: `[state] (Priority) [domain/binary] Task description @assignee +tag`
       with profile/role edit, password expiry telemetry, and associated TOTP
       device list with last_used_at timestamps and admin revocation
       @jovens@gotcode.org +phase1 +web +auth +security
-- [ ] (B) [web] Implement first-boot setup wizard for initial admin account
-      creation @jovens@gotcode.org +phase1 +web +auth
+- [x] (B) [web] Implement first-boot setup wizard for initial admin account
+      creation with single-run activation barrier @jovens@gotcode.org +phase1
+      +web +auth
 - [ ] (B) [crucibled] Add rootless service account (User=crucible) vs PAM
       (User=root) profiles to systemd unit command @jovens@gotcode.org +phase1
       +crucibled +systemd

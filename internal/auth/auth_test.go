@@ -700,6 +700,130 @@ func TestPasswordLifecycleAndAdminUserManagement(t *testing.T) {
 	pastTime := time.Now().UTC().Add(-45 * 24 * time.Hour)
 	bobU.PasswordChangedAt = pastTime
 	if !bobU.IsPasswordExpired(30 * 24 * time.Hour) {
-		t.Errorf("expected password to be expired for 45-day age with 30-day policy")
+		t.Errorf("expected password to be expired for 45-day age")
+	}
+}
+
+func setupInitialTestServices(
+	t *testing.T,
+) (*auth.CommandService, *auth.QueryService, func()) {
+	t.Helper()
+	db := setupTestDB(t)
+	store := auth.NewSQLiteStore(db)
+	authenticator := auth.NewSQLiteAuthenticator(store)
+	masterKey := make([]byte, 32)
+	crypter, err := auth.NewAESGCMCrypter(masterKey)
+	if err != nil {
+		t.Fatalf("creating crypter: %v", err)
+	}
+	cmdSvc := auth.NewCommandService(
+		authenticator,
+		store,
+		store,
+		store,
+		store,
+		store,
+		crypter,
+		false,
+	)
+	querySvc := auth.NewQueryService(store, store, store, store)
+	cleanup := func() {
+		if cErr := db.Close(); cErr != nil {
+			t.Logf("closing test db: %v", cErr)
+		}
+	}
+	return cmdSvc, querySvc, cleanup
+}
+
+func TestInitialSetup_Validation(t *testing.T) {
+	t.Parallel()
+	cmdSvc, _, cleanup := setupInitialTestServices(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	// 1. Empty password
+	_, err := cmdSvc.InitialSetup(ctx, auth.InitialSetupCommand{
+		Username: "admin",
+		Password: "",
+	})
+	if err == nil {
+		t.Fatal("expected error on empty password")
+	}
+
+	// 2. Mismatched confirm password
+	_, err = cmdSvc.InitialSetup(ctx, auth.InitialSetupCommand{
+		Username:        "admin",
+		Password:        "Password123!",
+		ConfirmPassword: "DifferentPassword123!",
+	})
+	if err == nil {
+		t.Fatal("expected error on mismatched confirm password")
+	}
+
+	// 3. Too short password
+	_, err = cmdSvc.InitialSetup(ctx, auth.InitialSetupCommand{
+		Username:  "admin",
+		Password:  "Short1!",
+		MinLength: 12,
+	})
+	if !errors.Is(err, auth.ErrPasswordTooShort) {
+		t.Fatalf("expected ErrPasswordTooShort, got %v", err)
+	}
+}
+
+func TestInitialSetup_SingleRunBarrier(t *testing.T) {
+	t.Parallel()
+	cmdSvc, querySvc, cleanup := setupInitialTestServices(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	// 1. Initial state: store has 0 users -> NeedsSetup must be true
+	needs, err := querySvc.NeedsSetup(ctx)
+	if err != nil || !needs {
+		t.Fatalf("expected NeedsSetup=true on fresh database, err=%v", err)
+	}
+
+	// 2. Successful Initial Setup
+	sess, err := cmdSvc.InitialSetup(ctx, auth.InitialSetupCommand{
+		Username:        "sysadmin",
+		Password:        "SuperSecretPass123!",
+		ConfirmPassword: "SuperSecretPass123!",
+		MinLength:       8,
+	})
+	if err != nil {
+		t.Fatalf("InitialSetup: %v", err)
+	}
+	if sess == nil || sess.Username != "sysadmin" {
+		t.Fatalf("unexpected session username: %+v", sess)
+	}
+
+	// 3. NeedsSetup must now be false
+	needs, err = querySvc.NeedsSetup(ctx)
+	if err != nil || needs {
+		t.Fatalf("expected NeedsSetup=false after setup, err=%v", err)
+	}
+
+	// 4. Single-run barrier: second attempt must fail
+	_, err = cmdSvc.InitialSetup(ctx, auth.InitialSetupCommand{
+		Username:        "intruder",
+		Password:        "HackerPassword123!",
+		ConfirmPassword: "HackerPassword123!",
+	})
+	if !errors.Is(err, auth.ErrSetupCompleted) {
+		t.Fatalf(
+			"expected ErrSetupCompleted on re-run attempt, got: %v",
+			err,
+		)
+	}
+
+	// 5. Verify user in database
+	u, qErr := querySvc.GetUser(ctx, auth.GetUserQuery{
+		Username: "sysadmin",
+	})
+	if qErr != nil || u == nil {
+		t.Fatalf("expected sysadmin user in db, err: %v", qErr)
+	}
+	if u.Role != auth.RoleAdmin {
+		t.Errorf("expected active admin user, got: %+v", u)
 	}
 }

@@ -31,6 +31,7 @@ func TestWebFS_EmbeddedAssets(t *testing.T) {
 		"templates/settings_password.html",
 		"templates/settings_users.html",
 		"templates/settings_tokens.html",
+		"templates/setup.html",
 		"static/css/style.css",
 		"static/js/app.js",
 	}
@@ -234,6 +235,28 @@ func TestRenderStandalone_EnforcePassword(t *testing.T) {
 	if strings.Contains(html, "<aside") ||
 		strings.Contains(html, "account-menu-btn") {
 		t.Errorf("enforce_password should not contain sidebar or account menu")
+	}
+}
+
+func TestRenderStandalone_Setup(t *testing.T) {
+	t.Parallel()
+
+	var buf bytes.Buffer
+	err := web.RenderStandalone(&buf, "setup.html", map[string]any{
+		"Version":           "v0.1.0",
+		"DefaultUsername":   "admin",
+		"MinPasswordLength": 8,
+		"Error":             "passwords do not match",
+	})
+	if err != nil {
+		t.Fatalf("RenderStandalone setup.html failed: %v", err)
+	}
+	html := buf.String()
+	if !strings.Contains(html, "First-Boot Setup") ||
+		!strings.Contains(html, "Create Admin Account") ||
+		!strings.Contains(html, "SINGLE-RUN ONLY") ||
+		!strings.Contains(html, "passwords do not match") {
+		t.Errorf("setup template missing expected content")
 	}
 }
 

@@ -91,6 +91,15 @@ type LoginPageContext struct {
 	Next         string
 }
 
+// SetupPageContext carries view model data for standalone setup.html.
+type SetupPageContext struct {
+	Version           string
+	AuthProvider      string
+	DefaultUsername   string
+	MinPasswordLength int
+	Error             string
+}
+
 // TwoFactorPageContext carries view model data for standalone 2fa.html.
 type TwoFactorPageContext struct {
 	Username       string

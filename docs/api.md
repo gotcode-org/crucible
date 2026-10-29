@@ -61,7 +61,42 @@ active storage driver, WAL pragmas, and uptime telemetry.
 
 ---
 
-## 3. Authentication & Session Management
+## 3. First-Boot Setup & System Initialization
+
+Crucible features an automated first-boot setup wizard. When the database has
+zero registered accounts (`CountUsers == 0`), visitors to `/`, `/login`, or
+`/operator` are redirected to `/setup`. Once an administrator account is
+provisioned, setup is permanently locked and further attempts return
+`403 Forbidden`.
+
+### `GET /api/v1/setup`
+Reports whether the installation currently requires first-boot setup.
+
+- **Authentication**: None (public).
+- **Responses**:
+  - `200 OK`: `{"needs_setup": true|false}`
+
+### `POST /api/v1/setup`
+Initializes the system by creating the initial root administrator account and
+active session. Can only be invoked when `needs_setup` is `true`.
+
+- **Authentication**: None (first boot only).
+- **Request Body**:
+```json
+{
+  "username": "admin",
+  "password": "InitialAdminPassword123!",
+  "confirm_password": "InitialAdminPassword123!"
+}
+```
+- **Responses**:
+  - `201 Created`: Setup succeeded; returns admin details and session ID.
+  - `400 Bad Request`: Validation error (mismatched or invalid password).
+  - `403 Forbidden`: Setup has already been completed.
+
+---
+
+## 4. Authentication & Session Management
 
 ### `POST /api/v1/auth/login`
 Authenticates user credentials against configured authentication backends
@@ -176,7 +211,7 @@ Returns details of the currently authenticated session.
 
 ---
 
-## 4. Multi-Device Two-Factor Authentication (2FA)
+## 5. Multi-Device Two-Factor Authentication (2FA)
 
 ### `GET /api/v1/auth/devices`
 Lists all active RFC 6238 TOTP authenticator devices enrolled for the
@@ -282,7 +317,7 @@ administrative accounts (e.g. `root`).
 
 ---
 
-## 5. Personal Access Tokens (PAT) Subsystem
+## 6. Personal Access Tokens (PAT) Subsystem
 
 Personal Access Tokens provide high-entropy API key credentials for remote
 `cruciblectl` operations and external automation. Plaintext tokens conform
@@ -367,12 +402,14 @@ this token are immediately rejected with `401 Unauthorized`.
 
 ---
 
-## 6. Web Console Form Actions
+## 7. Web Console Form Actions
 
 The web console provides form-based endpoints for operator interactions:
 
 | Method | Endpoint | Description | Role |
 |:-------|:---------|:------------|:-----|
+| `GET`  | `/setup` | First-boot setup wizard | Guest (uninitialized) |
+| `POST` | `/setup` | Initialize root admin | Guest (uninitialized) |
 | `POST` | `/login` | Form login submission | Guest |
 | `POST` | `/auth/2fa` | Form 2FA challenge response | Guest |
 | `GET`  | `/logout` | Invalidate current session | Auth |
@@ -392,7 +429,7 @@ The web console provides form-based endpoints for operator interactions:
 
 ---
 
-## 7. Standard Error Codes & Status Summary
+## 8. Standard Error Codes & Status Summary
 
 | Status | Meaning | Typical Scenario |
 |:-------|:--------|:-----------------|

@@ -112,6 +112,7 @@ func (s *HTTPServer) setupRoutes() error {
 		http.StripPrefix("/static/", http.FileServer(http.FS(staticFS))),
 	)
 	s.mux.HandleFunc("/healthz", s.handleHealthz)
+	s.mux.HandleFunc("/setup", s.handleSetup)
 	s.mux.HandleFunc("/login", s.handleLogin)
 	s.mux.HandleFunc("/auth/2fa", s.handle2FA)
 	s.mux.HandleFunc("/logout", s.handleLogout)
@@ -144,6 +145,7 @@ func (s *HTTPServer) setupRoutes() error {
 	)
 
 	// JSON API endpoints
+	s.mux.HandleFunc("/api/v1/setup", s.handleAPISetup)
 	s.mux.HandleFunc("/api/v1/tokens", s.handleAPITokens)
 	s.mux.HandleFunc("/api/v1/auth/login", s.handleAPILogin)
 	s.mux.HandleFunc("/api/v1/auth/verify-2fa", s.handleAPIVerify2FA)
@@ -515,6 +517,15 @@ func (s *HTTPServer) handlePublicDashboard(
 		return
 	}
 
+	if s.authQuery != nil {
+		if needs, nErr := s.authQuery.NeedsSetup(
+			r.Context(),
+		); nErr == nil && needs {
+			http.Redirect(w, r, "/setup", http.StatusFound)
+			return
+		}
+	}
+
 	var isAuth bool
 	var username, role string
 
@@ -568,6 +579,15 @@ func (s *HTTPServer) handleOperatorDashboard(
 	if r.URL.Path != "/operator" {
 		http.NotFound(w, r)
 		return
+	}
+
+	if s.authQuery != nil {
+		if needs, nErr := s.authQuery.NeedsSetup(
+			r.Context(),
+		); nErr == nil && needs {
+			http.Redirect(w, r, "/setup", http.StatusFound)
+			return
+		}
 	}
 
 	var session *auth.Session
@@ -721,10 +741,262 @@ func (s *HTTPServer) extractSession(r *http.Request) (*auth.Session, error) {
 	return nil, errors.New("missing session token")
 }
 
+func (s *HTTPServer) handleSetup(w http.ResponseWriter, r *http.Request) {
+	if s.authQuery == nil || s.authCmd == nil {
+		http.Redirect(w, r, "/operator", http.StatusFound)
+		return
+	}
+
+	needs, err := s.authQuery.NeedsSetup(r.Context())
+	if err != nil {
+		http.Error(
+			w,
+			"Internal Server Error",
+			http.StatusInternalServerError,
+		)
+		return
+	}
+	if !needs {
+		if r.Method == http.MethodGet {
+			http.Redirect(w, r, "/login", http.StatusFound)
+			return
+		}
+		http.Error(
+			w,
+			"Setup has already been completed",
+			http.StatusForbidden,
+		)
+		return
+	}
+
+	if r.Method == http.MethodGet {
+		s.handleSetupGet(w, r)
+		return
+	}
+	if r.Method == http.MethodPost {
+		s.handleSetupPost(w, r)
+		return
+	}
+
+	http.Error(
+		w,
+		"Method Not Allowed",
+		http.StatusMethodNotAllowed,
+	)
+}
+
+func (s *HTTPServer) handleSetupGet(
+	w http.ResponseWriter,
+	r *http.Request,
+) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	minLen := s.cfg.PasswordPolicy.MinLength
+	if minLen <= 0 {
+		minLen = 8
+	}
+	ctx := SetupPageContext{
+		Version:           s.cfg.Version,
+		AuthProvider:      s.cfg.AuthProvider,
+		DefaultUsername:   "admin",
+		MinPasswordLength: minLen,
+	}
+	if err := web.RenderStandalone(w, "setup.html", ctx); err != nil {
+		http.Error(w, "Render Error", http.StatusInternalServerError)
+	}
+}
+
+func (s *HTTPServer) handleSetupPost(
+	w http.ResponseWriter,
+	r *http.Request,
+) {
+	username := strings.TrimSpace(r.FormValue("username"))
+	password := r.FormValue("password")
+	confirmPassword := r.FormValue("confirm_password")
+
+	minLen := s.cfg.PasswordPolicy.MinLength
+	if minLen <= 0 {
+		minLen = 8
+	}
+
+	sess, err := s.authCmd.InitialSetup(
+		r.Context(),
+		auth.InitialSetupCommand{
+			Username:        username,
+			Password:        password,
+			ConfirmPassword: confirmPassword,
+			MinLength:       minLen,
+		},
+	)
+	if err != nil {
+		if errors.Is(err, auth.ErrSetupCompleted) {
+			http.Error(
+				w,
+				"Setup has already been completed",
+				http.StatusForbidden,
+			)
+			return
+		}
+
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.WriteHeader(http.StatusBadRequest)
+		ctx := SetupPageContext{
+			Version:           s.cfg.Version,
+			AuthProvider:      s.cfg.AuthProvider,
+			DefaultUsername:   username,
+			MinPasswordLength: minLen,
+			Error:             err.Error(),
+		}
+		if rErr := web.RenderStandalone(w, "setup.html", ctx); rErr != nil {
+			http.Error(w, "Render Error", http.StatusInternalServerError)
+		}
+		return
+	}
+
+	http.SetCookie(w, &http.Cookie{
+		Name:     SessionCookieName,
+		Value:    sess.ID,
+		Path:     "/",
+		Expires:  sess.ExpiresAt,
+		HttpOnly: true,
+		SameSite: http.SameSiteStrictMode,
+	})
+
+	if s.cfg.Require2FA {
+		http.Redirect(
+			w,
+			r,
+			"/settings/2fa?enforce=true",
+			http.StatusFound,
+		)
+		return
+	}
+
+	http.Redirect(w, r, "/operator", http.StatusFound)
+}
+
+func (s *HTTPServer) handleAPISetup(
+	w http.ResponseWriter,
+	r *http.Request,
+) {
+	if s.authQuery == nil || s.authCmd == nil {
+		http.Error(
+			w,
+			"Auth unconfigured",
+			http.StatusServiceUnavailable,
+		)
+		return
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		needs, err := s.authQuery.NeedsSetup(r.Context())
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if encErr := json.NewEncoder(w).Encode(map[string]any{
+			"needs_setup": needs,
+		}); encErr != nil {
+			http.Error(w, encErr.Error(), http.StatusInternalServerError)
+			return
+		}
+
+	case http.MethodPost:
+		needs, err := s.authQuery.NeedsSetup(r.Context())
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if !needs {
+			http.Error(
+				w,
+				"Setup has already been completed",
+				http.StatusForbidden,
+			)
+			return
+		}
+
+		var req struct {
+			Username        string `json:"username"`
+			Password        string `json:"password"`
+			ConfirmPassword string `json:"confirm_password"`
+		}
+		if dErr := json.NewDecoder(r.Body).Decode(&req); dErr != nil {
+			http.Error(w, "Invalid request body", http.StatusBadRequest)
+			return
+		}
+
+		minLen := s.cfg.PasswordPolicy.MinLength
+		if minLen <= 0 {
+			minLen = 8
+		}
+
+		sess, sErr := s.authCmd.InitialSetup(
+			r.Context(),
+			auth.InitialSetupCommand{
+				Username:        req.Username,
+				Password:        req.Password,
+				ConfirmPassword: req.ConfirmPassword,
+				MinLength:       minLen,
+			},
+		)
+		if sErr != nil {
+			if errors.Is(sErr, auth.ErrSetupCompleted) {
+				http.Error(
+					w,
+					"Setup has already been completed",
+					http.StatusForbidden,
+				)
+				return
+			}
+			http.Error(w, sErr.Error(), http.StatusBadRequest)
+			return
+		}
+
+		http.SetCookie(w, &http.Cookie{
+			Name:     SessionCookieName,
+			Value:    sess.ID,
+			Path:     "/",
+			Expires:  sess.ExpiresAt,
+			HttpOnly: true,
+			SameSite: http.SameSiteStrictMode,
+		})
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		if encErr := json.NewEncoder(w).Encode(map[string]any{
+			"status":     "ok",
+			"username":   sess.Username,
+			"role":       sess.Role,
+			"session_id": sess.ID,
+		}); encErr != nil {
+			http.Error(w, encErr.Error(), http.StatusInternalServerError)
+			return
+		}
+
+	default:
+		http.Error(
+			w,
+			"Method Not Allowed",
+			http.StatusMethodNotAllowed,
+		)
+	}
+}
+
 func (s *HTTPServer) handleLogin(w http.ResponseWriter, r *http.Request) {
 	if s.authCmd == nil {
 		http.Redirect(w, r, "/operator", http.StatusFound)
 		return
+	}
+
+	if s.authQuery != nil {
+		if needs, nErr := s.authQuery.NeedsSetup(
+			r.Context(),
+		); nErr == nil && needs {
+			http.Redirect(w, r, "/setup", http.StatusFound)
+			return
+		}
 	}
 
 	authProv := s.cfg.AuthProvider
