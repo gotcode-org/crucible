@@ -115,7 +115,11 @@
       </div>
       {{ end }}
 
-      <form action="/login" method="POST" class="space-y-5">
+      <form action="/login{{ if .Next }}?next={{ .Next }}{{ end }}"
+            method="POST" class="space-y-5">
+        {{ if .Next }}
+        <input type="hidden" name="next" value="{{ .Next }}" />
+        {{ end }}
         <div class="space-y-1.5">
           <label for="username" class="block text-xs font-mono uppercase tracking-wider text-zinc-400">Operator Username</label>
           <input

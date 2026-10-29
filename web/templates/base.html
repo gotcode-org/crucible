@@ -28,7 +28,7 @@
   <aside class="w-64 bg-zinc-900/50 border-r border-zinc-800/80 flex flex-col justify-between shrink-0 select-none">
     <!-- Brand + Primary Navigation -->
     <div class="p-4 space-y-6">
-      <a href="/" class="flex items-center justify-between px-2 py-1.5">
+      <a href="/operator" class="flex items-center justify-between px-2 py-1.5">
         <div class="flex items-center gap-2.5">
           <div class="w-8 h-8 rounded-lg bg-emerald-500/10 border border-emerald-500/40 flex items-center justify-center text-emerald-400 font-mono font-bold text-sm">
             &gt;_
@@ -44,7 +44,10 @@
       <!-- Navigation Links -->
       <div class="space-y-1">
         <div class="px-2 pb-1 text-[10px] font-mono uppercase tracking-widest text-zinc-500">Operations</div>
-        <a href="/" class="flex items-center justify-between px-3 py-2 rounded-lg text-xs font-semibold {{ if eq .ActiveNav "overview" }}bg-emerald-500/10 text-emerald-400 border border-emerald-500/25{{ else }}text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800/50 transition-colors{{ end }}">
+        <a
+          href="/operator"
+          class="flex items-center justify-between px-3 py-2 rounded-lg text-xs font-semibold {{ if eq .ActiveNav "overview" }}bg-emerald-500/10 text-emerald-400 border border-emerald-500/25{{ else }}text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800/50 transition-colors{{ end }}"
+        >
           <span class="flex items-center gap-2.5">
             <span class="font-mono">01</span>
             <span>Command Overview</span>
@@ -196,6 +199,19 @@
                 <div class="min-w-0">
                   <div class="font-medium">Security & 2FA</div>
                   <div class="text-[10px] text-zinc-500 font-mono">TOTP tokens & keys</div>
+                </div>
+              </a>
+              <a
+                href="/"
+                class="flex items-center gap-3 px-4 py-2 text-xs text-zinc-300 hover:text-white hover:bg-zinc-900 transition-colors"
+              >
+                <svg class="w-4 h-4 text-cyan-400 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+                </svg>
+                <div class="min-w-0">
+                  <div class="font-medium">Public Monitor</div>
+                  <div class="text-[10px] text-zinc-500 font-mono">View public runs</div>
                 </div>
               </a>
             </div>

@@ -133,12 +133,8 @@ func TestServer_Healthz_OK(t *testing.T) {
 	}
 }
 
-func TestServer_Dashboard(t *testing.T) {
-	t.Parallel()
-
-	srv, _, _ := setupTestServer(t, true)
-
-	// 1. Root dashboard request
+func testPublicDashboardContent(t *testing.T, srv *server.HTTPServer) {
+	t.Helper()
 	resp, err := http.Get("http://" + srv.HTTPAddr() + "/")
 	if err != nil {
 		t.Fatalf("GET / failed: %v", err)
@@ -157,9 +153,46 @@ func TestServer_Dashboard(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to read response body: %v", err)
 	}
-	html := string(body)
+	pubHTML := string(body)
 
-	expectedTokens := []string{
+	pubTokens := []string{
+		"CRUCIBLE",
+		"PUBLIC MONITOR",
+		"Public Pipeline Monitor",
+		"Operator Sign In",
+		"Sovereign Execution",
+	}
+
+	for _, token := range pubTokens {
+		if !strings.Contains(pubHTML, token) {
+			t.Errorf("expected public dashboard HTML to contain %q", token)
+		}
+	}
+}
+
+func testOperatorDashboardContent(t *testing.T, srv *server.HTTPServer) {
+	t.Helper()
+	opResp, err := http.Get("http://" + srv.HTTPAddr() + "/operator")
+	if err != nil {
+		t.Fatalf("GET /operator failed: %v", err)
+	}
+	defer func() {
+		if closeErr := opResp.Body.Close(); closeErr != nil {
+			t.Errorf("closing response body: %v", closeErr)
+		}
+	}()
+
+	if opResp.StatusCode != http.StatusOK {
+		t.Fatalf("expected status 200, got %d", opResp.StatusCode)
+	}
+
+	opBody, err := io.ReadAll(opResp.Body)
+	if err != nil {
+		t.Fatalf("failed to read operator response body: %v", err)
+	}
+	opHTML := string(opBody)
+
+	opTokens := []string{
 		"CRUCIBLE",
 		"Command Overview",
 		"ONLINE",
@@ -170,13 +203,15 @@ func TestServer_Dashboard(t *testing.T) {
 		"curl --unix-socket",
 	}
 
-	for _, token := range expectedTokens {
-		if !strings.Contains(html, token) {
-			t.Errorf("expected dashboard HTML to contain %q", token)
+	for _, token := range opTokens {
+		if !strings.Contains(opHTML, token) {
+			t.Errorf("expected operator dashboard HTML to contain %q", token)
 		}
 	}
+}
 
-	// 2. Not found path
+func testNotFoundPath(t *testing.T, srv *server.HTTPServer) {
+	t.Helper()
 	nfResp, err := http.Get("http://" + srv.HTTPAddr() + "/invalid-route")
 	if err != nil {
 		t.Fatalf("GET /invalid-route failed: %v", err)
@@ -190,6 +225,16 @@ func TestServer_Dashboard(t *testing.T) {
 	if nfResp.StatusCode != http.StatusNotFound {
 		t.Errorf("expected 404 for invalid route, got %d", nfResp.StatusCode)
 	}
+}
+
+func TestServer_Dashboard(t *testing.T) {
+	t.Parallel()
+
+	srv, _, _ := setupTestServer(t, true)
+
+	testPublicDashboardContent(t, srv)
+	testOperatorDashboardContent(t, srv)
+	testNotFoundPath(t, srv)
 }
 
 func TestServer_StaticAssets(t *testing.T) {
@@ -486,14 +531,33 @@ func TestAuthWeb_UnauthenticatedRedirect(t *testing.T) {
 		},
 	}
 
-	resp, err := client.Get(baseURL + "/")
+	// 1. Root / is public and accessible unauthenticated (200 OK)
+	pubResp, err := client.Get(baseURL + "/")
 	if err != nil {
 		t.Fatalf("get / unauthenticated: %v", err)
 	}
-	defer closeBody(t, resp)
+	defer closeBody(t, pubResp)
 
-	if resp.StatusCode != http.StatusFound {
-		t.Errorf("expected 302 redirect to /login, got %d", resp.StatusCode)
+	if pubResp.StatusCode != http.StatusOK {
+		t.Errorf("expected 200 OK on public /, got %d", pubResp.StatusCode)
+	}
+
+	// 2. /operator requires authentication and redirects to login (302)
+	opResp, err := client.Get(baseURL + "/operator")
+	if err != nil {
+		t.Fatalf("get /operator unauthenticated: %v", err)
+	}
+	defer closeBody(t, opResp)
+
+	if opResp.StatusCode != http.StatusFound {
+		t.Errorf(
+			"expected 302 redirect to /login on /operator, got %d",
+			opResp.StatusCode,
+		)
+	}
+	loc := opResp.Header.Get("Location")
+	if !strings.Contains(loc, "/login") || !strings.Contains(loc, "next=") {
+		t.Errorf("expected redirect to login with next param, got %q", loc)
 	}
 }
 
@@ -551,6 +615,10 @@ func testWebLoginValid(
 	if resp.StatusCode != http.StatusFound {
 		t.Errorf("expected 302 redirect after login, got %d", resp.StatusCode)
 	}
+	loc := resp.Header.Get("Location")
+	if loc != "/operator" {
+		t.Errorf("expected redirect to /operator after login, got %q", loc)
+	}
 
 	for _, c := range resp.Cookies() {
 		if c.Name == server.SessionCookieName {
@@ -568,14 +636,16 @@ func testWebDashboardAuth(
 	sessionCookie *http.Cookie,
 ) {
 	t.Helper()
-	req, rErr := http.NewRequest(http.MethodGet, baseURL+"/", nil)
+
+	// 1. Operator console at /operator
+	req, rErr := http.NewRequest(http.MethodGet, baseURL+"/operator", nil)
 	if rErr != nil {
 		t.Fatalf("creating req: %v", rErr)
 	}
 	req.AddCookie(sessionCookie)
 	resp, err := client.Do(req)
 	if err != nil {
-		t.Fatalf("get dashboard: %v", err)
+		t.Fatalf("get /operator: %v", err)
 	}
 	dashBody, rErr := io.ReadAll(resp.Body)
 	closeBody(t, resp)
@@ -585,6 +655,26 @@ func testWebDashboardAuth(
 	if resp.StatusCode != http.StatusOK ||
 		!strings.Contains(string(dashBody), "Command Overview") {
 		t.Errorf("unexpected dashboard response: %d", resp.StatusCode)
+	}
+
+	// 2. Public portal at / with active session shows console button
+	pubReq, rErr := http.NewRequest(http.MethodGet, baseURL+"/", nil)
+	if rErr != nil {
+		t.Fatalf("creating pub req: %v", rErr)
+	}
+	pubReq.AddCookie(sessionCookie)
+	pubResp, err := client.Do(pubReq)
+	if err != nil {
+		t.Fatalf("get / with session: %v", err)
+	}
+	pubBody, rErr := io.ReadAll(pubResp.Body)
+	closeBody(t, pubResp)
+	if rErr != nil {
+		t.Fatalf("reading public body: %v", rErr)
+	}
+	if pubResp.StatusCode != http.StatusOK ||
+		!strings.Contains(string(pubBody), "Console") {
+		t.Errorf("unexpected public response with auth: %d", pubResp.StatusCode)
 	}
 }
 

@@ -84,6 +84,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     credential authentication, multi-device management, and single-use
     onboarding invite generation with terminal QR codes.
 - **Web Console Views & Templates**:
+  - Added standalone Public Execution Monitor at `/`
+    ([`public_dashboard.html`](./web/templates/public_dashboard.html))
+    providing clean, centered pipeline visibility for unauthenticated
+    visitors without sidebar controls or engine diagnostics.
+  - Added redirect destination preservation via `next` parameter across
+    `/login` and `/auth/2fa` views with open-redirect validation.
   - Added standalone `/login` authentication form and `/auth/2fa` challenge
     verification page with branded responsive layout.
   - Added `/settings/2fa` multi-device security management dashboard with
@@ -114,6 +120,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     operator CLI ([`cmd/cruciblectl/main.go`](./cmd/cruciblectl/main.go)).
 
 ### Changed
+- Decoupled public execution portal from operational workspace: moved the
+  authenticated Operations Control Plane with command sidebar and database
+  engine diagnostics from `/` to `/operator`.
+- Updated navigation brand header and account dropdown links in
+  [`base.html`](./web/templates/base.html) to target `/operator`.
+- Updated technical blueprint in [`PLAN.md`](./PLAN.md) and
+  [`TODO.md`](./TODO.md) establishing `internal/storage/` as centralized
+  persistence authority, detailing multi-database dialect abstraction
+  (SQLite, PostgreSQL, MySQL), and defining first-login password
+  enforcement and expiry rotation policies.
 
 ### Deprecated
 

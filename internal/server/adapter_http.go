@@ -114,7 +114,8 @@ func (s *HTTPServer) setupRoutes() error {
 	s.mux.HandleFunc("/api/v1/auth/invite", s.handleAPIInvite)
 	s.mux.HandleFunc("/api/v1/auth/session", s.handleAPISession)
 
-	s.mux.HandleFunc("/", s.handleDashboard)
+	s.mux.HandleFunc("/operator", s.handleOperatorDashboard)
+	s.mux.HandleFunc("/", s.handlePublicDashboard)
 
 	return nil
 }
@@ -446,8 +447,81 @@ func (s *HTTPServer) checkDatabaseHealth(
 	}
 }
 
-func (s *HTTPServer) handleDashboard(w http.ResponseWriter, r *http.Request) {
+func (s *HTTPServer) resolveNextPath(
+	r *http.Request,
+	defaultPath string,
+) string {
+	next := r.FormValue("next")
+	if next == "" {
+		next = r.URL.Query().Get("next")
+	}
+	if next == "" || !strings.HasPrefix(next, "/") ||
+		strings.HasPrefix(next, "//") {
+		return defaultPath
+	}
+	return next
+}
+
+func (s *HTTPServer) handlePublicDashboard(
+	w http.ResponseWriter,
+	r *http.Request,
+) {
 	if r.URL.Path != "/" {
+		http.NotFound(w, r)
+		return
+	}
+
+	var isAuth bool
+	var username, role string
+
+	if s.authQuery != nil {
+		if sess, err := s.extractSession(r); err == nil && sess != nil {
+			isAuth = true
+			username = sess.Username
+			role = string(sess.Role)
+		}
+	}
+
+	st := s.queryStorageStatus(r.Context())
+	driver := "sqlite"
+	integOK := true
+	if st != nil {
+		driver = st.Driver
+		integOK = st.IntegrityOK
+	}
+
+	uptimeDuration := time.Since(s.startedAt).Truncate(time.Second)
+
+	pubCtx := PublicDashboardContext{
+		Title:           "Public Monitor",
+		Version:         s.cfg.Version,
+		HTTPBind:        s.cfg.HTTPBind,
+		HTTPPort:        s.effectivePort(),
+		DaemonMode:      s.cfg.DaemonMode,
+		IsAuthenticated: isAuth,
+		OperatorUser:    username,
+		OperatorRole:    role,
+		Uptime:          uptimeDuration.String(),
+		StartedAt:       s.startedAt,
+		DatabaseDriver:  driver,
+		IntegrityOK:     integOK,
+	}
+
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if err := web.RenderStandalone(
+		w,
+		"public_dashboard.html",
+		pubCtx,
+	); err != nil {
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+	}
+}
+
+func (s *HTTPServer) handleOperatorDashboard(
+	w http.ResponseWriter,
+	r *http.Request,
+) {
+	if r.URL.Path != "/operator" {
 		http.NotFound(w, r)
 		return
 	}
@@ -456,7 +530,12 @@ func (s *HTTPServer) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	if s.authQuery != nil {
 		sess, err := s.extractSession(r)
 		if err != nil || sess == nil {
-			http.Redirect(w, r, "/login", http.StatusFound)
+			http.Redirect(
+				w,
+				r,
+				"/login?next=/operator",
+				http.StatusFound,
+			)
 			return
 		}
 		if s.cfg.Require2FA {
@@ -547,7 +626,7 @@ func (s *HTTPServer) extractSession(r *http.Request) (*auth.Session, error) {
 
 func (s *HTTPServer) handleLogin(w http.ResponseWriter, r *http.Request) {
 	if s.authCmd == nil {
-		http.Redirect(w, r, "/", http.StatusFound)
+		http.Redirect(w, r, "/operator", http.StatusFound)
 		return
 	}
 
@@ -573,9 +652,10 @@ func (s *HTTPServer) handleLoginGet(
 	r *http.Request,
 	authProv string,
 ) {
+	nextPath := s.resolveNextPath(r, "/operator")
 	if s.authQuery != nil {
 		if _, err := s.extractSession(r); err == nil {
-			http.Redirect(w, r, "/", http.StatusFound)
+			http.Redirect(w, r, nextPath, http.StatusFound)
 			return
 		}
 	}
@@ -583,6 +663,7 @@ func (s *HTTPServer) handleLoginGet(
 	if err := web.RenderStandalone(w, "login.html", LoginPageContext{
 		Version:      s.cfg.Version,
 		AuthProvider: authProv,
+		Next:         nextPath,
 	}); err != nil {
 		http.Error(w, "Render Error", http.StatusInternalServerError)
 	}
@@ -593,6 +674,7 @@ func (s *HTTPServer) handleLoginPost(
 	r *http.Request,
 	authProv string,
 ) {
+	nextPath := s.resolveNextPath(r, "/operator")
 	username := strings.TrimSpace(r.FormValue("username"))
 	password := r.FormValue("password")
 
@@ -601,14 +683,15 @@ func (s *HTTPServer) handleLoginPost(
 		Password: password,
 	})
 	if err != nil {
-		s.renderLoginError(w, authProv, username, err)
+		s.renderLoginError(w, authProv, username, nextPath, err)
 		return
 	}
 
 	if loginRes.Requires2FA {
 		redir := fmt.Sprintf(
-			"/auth/2fa?token=%s",
+			"/auth/2fa?token=%s&next=%s",
 			url.QueryEscape(loginRes.ChallengeToken),
+			url.QueryEscape(nextPath),
 		)
 		http.Redirect(w, r, redir, http.StatusFound)
 		return
@@ -639,13 +722,14 @@ func (s *HTTPServer) handleLoginPost(
 		}
 	}
 
-	http.Redirect(w, r, "/", http.StatusFound)
+	http.Redirect(w, r, nextPath, http.StatusFound)
 }
 
 func (s *HTTPServer) renderLoginError(
 	w http.ResponseWriter,
 	authProv string,
 	username string,
+	nextPath string,
 	err error,
 ) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -661,6 +745,7 @@ func (s *HTTPServer) renderLoginError(
 		AuthProvider: authProv,
 		Username:     username,
 		Error:        errMsg,
+		Next:         nextPath,
 	}); rErr != nil {
 		http.Error(w, "Render Error", http.StatusInternalServerError)
 	}
@@ -668,19 +753,27 @@ func (s *HTTPServer) renderLoginError(
 
 func (s *HTTPServer) handle2FA(w http.ResponseWriter, r *http.Request) {
 	if s.authCmd == nil {
-		http.Redirect(w, r, "/", http.StatusFound)
+		http.Redirect(w, r, "/operator", http.StatusFound)
 		return
 	}
+
+	nextPath := s.resolveNextPath(r, "/operator")
 
 	if r.Method == http.MethodGet {
 		token := r.URL.Query().Get("token")
 		if token == "" {
-			http.Redirect(w, r, "/login", http.StatusFound)
+			http.Redirect(
+				w,
+				r,
+				"/login?next="+url.QueryEscape(nextPath),
+				http.StatusFound,
+			)
 			return
 		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		if err := web.RenderStandalone(w, "2fa.html", TwoFactorPageContext{
 			ChallengeToken: token,
+			Next:           nextPath,
 		}); err != nil {
 			http.Error(w, "Render Error", http.StatusInternalServerError)
 		}
@@ -705,6 +798,7 @@ func (s *HTTPServer) handle2FA(w http.ResponseWriter, r *http.Request) {
 		if rErr := web.RenderStandalone(w, "2fa.html", TwoFactorPageContext{
 			ChallengeToken: token,
 			Error:          "Invalid 2FA passcode or expired challenge",
+			Next:           nextPath,
 		}); rErr != nil {
 			http.Error(w, "Render Error", http.StatusInternalServerError)
 		}
@@ -719,7 +813,7 @@ func (s *HTTPServer) handle2FA(w http.ResponseWriter, r *http.Request) {
 		HttpOnly: true,
 		SameSite: http.SameSiteStrictMode,
 	})
-	http.Redirect(w, r, "/", http.StatusFound)
+	http.Redirect(w, r, nextPath, http.StatusFound)
 }
 
 func (s *HTTPServer) handleLogout(w http.ResponseWriter, r *http.Request) {
@@ -741,7 +835,7 @@ func (s *HTTPServer) handleLogout(w http.ResponseWriter, r *http.Request) {
 		HttpOnly: true,
 		SameSite: http.SameSiteStrictMode,
 	})
-	http.Redirect(w, r, "/login", http.StatusFound)
+	http.Redirect(w, r, "/", http.StatusFound)
 }
 
 func (s *HTTPServer) handleSettings2FA(
@@ -750,7 +844,7 @@ func (s *HTTPServer) handleSettings2FA(
 ) {
 	sess, err := s.extractSession(r)
 	if err != nil || sess == nil {
-		http.Redirect(w, r, "/login", http.StatusFound)
+		http.Redirect(w, r, "/login?next=/settings/2fa", http.StatusFound)
 		return
 	}
 

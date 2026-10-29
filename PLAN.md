@@ -64,18 +64,21 @@ Pi**, integrating cleanly with upstream Git repositories and notifications.
   * If the executing server crashes mid-job, the lease expires and the peer
     safely takes over without duplicate runs or split-brain.
 * **Public Read-Only UI with Job-Level Visibility (Public vs. Private):**
-  * **Public Runs & Reports**: Operators can mark jobs and pipelines as
-    `visibility: public` or `visibility: private` (default). Anonymous,
-    unauthenticated visitors can view the public dashboard, tail live execution
-    logs, and inspect generated HTML reports for all `public` jobs without
-    logging in.
+  * **Standalone Public Portal (`/`)**: Unauthenticated visitors are served a
+    clean, centered public build monitor (`public_runs.html`) without the
+    internal command sidebar, database diagnostics, or server internals.
+  * **Strictly Read-Only Access**: Anonymous visitors can view public run
+    lists, tail live execution logs (`public_run_logs.html`), and inspect
+    generated HTML reports. All mutation actions ("Run Now", "Re-run",
+    "Cancel", "Delete", parameter inputs) are completely omitted; all POST
+    endpoints strictly require authenticated sessions.
   * **Private Runs Protection**: Private automation tasks, inventories,
     host/group variables, cluster node management, SSH keys, secrets vault, and
     audit logs are strictly invisible to anonymous visitors (returning 404 Not
     Found to prevent information disclosure).
-  * **Authenticated Operators / Admins**: Secure login unlocking action buttons
-    to trigger ad-hoc runs, configure recurring schedules, cancel active
-    executions, edit inventories, and manage cluster nodes.
+  * **Authenticated Operations Console (`/operator`)**: Logging in unlocks the
+    full control plane (`dashboard.html` with `base.html`), including command
+    sidebar, engine diagnostics widget, private runs, and RBAC action controls.
 * **Crucible-Style Zero-RAM Log Streaming to Disk & Sharded HTML Reports:**
   * Subprocess stdout and stderr stream directly into append-only disk log
     files (`var/reports/{shard}/{ulid}_{slug}.log`) sharded chronologically by
@@ -161,23 +164,34 @@ Pi**, integrating cleanly with upstream Git repositories and notifications.
   for terminal UI styling, formatted status tables, borders, and banners for
   ad-hoc job triggers, log tailing, schedule administration, worker node
   monitoring, and token management.
-* **Flat Feature Package Layout:** Modular, feature-by-feature layout directly
-  under `internal/` (`internal/version/`, `internal/ui/`, `internal/id/`,
-  `internal/ansible/`, `internal/git/`, `internal/cluster/`,
-  `internal/engine/`, `internal/auth/`, `internal/tokens/`, `internal/ssh/`,
-  `internal/tls/`, `internal/storage/`, `internal/schedule/`,
-  `internal/metrics/`, `internal/notify/`, `internal/events/`). Zero layered
-  nesting (`domain/`, `application/`, `transport/`, `ports/`). Each feature
-  folder encapsulates its models, business logic, and store methods.
+* **Flat Feature Package Layout with Port-Isolated Domains:** Modular,
+  feature-by-feature layout directly under `internal/` (`internal/version/`,
+  `internal/ui/`, `internal/id/`, `internal/ansible/`, `internal/git/`,
+  `internal/cluster/`, `internal/engine/`, `internal/auth/`,
+  `internal/tokens/`, `internal/ssh/`, `internal/tls/`, `internal/storage/`,
+  `internal/schedule/`, `internal/metrics/`, `internal/notify/`,
+  `internal/events/`). Zero layered nesting (`domain/`, `application/`,
+  `transport/`). Domain packages define their domain entities, CQRS
+  handlers, and abstract outbound ports (`ports.go`), remaining 100% free of
+  database driver imports and SQL queries.
+* **Centralized Persistence Authority (`internal/storage/`):**
+  `internal/storage` is the sole persistence authority in Crucible. It owns
+  all database engine lifecycles, connection pooling, WAL mode, transaction
+  coordination (`storage.Transactor`), and schema migrations. It implements
+  the outbound persistence ports defined by domain packages (e.g.
+  `auth.UserStore`, `tokens.TokenStore`, `audit.AuditStore`), ensuring domain
+  modules know nothing about SQL or database engines. Multi-database support
+  (SQLite, PostgreSQL, MySQL) is quarantined entirely inside
+  `internal/storage/` via lightweight dialect abstraction (`dialect.go`).
 * **Automated Security & Vulnerability Pipeline:** Mandatory pre-build security
   auditing integrating `gosec` (AST source code security scanner) and
   `govulncheck` (Go vulnerability database checker) chained directly into `make
   all` before test and compilation.
-* **External `.sql` Database Schema Files:** All SQLite table definitions,
+* **External `.sql` Database Schema Files:** All database table definitions,
   indexes, and migrations are kept strictly in external `.sql` files
   (`internal/storage/schema/*.sql`), never hardcoded as string literals in
-  `.go` source files. Embedded into the binary via Go `//go:embed` for seamless
-  auto-migration at startup.
+  `.go` source files. Embedded into the binary via Go `//go:embed` for
+  seamless auto-migration at startup across supported database engines.
 * **Prometheus Observability (`/metrics` Endpoint):**
   * Native scraping endpoint exposing pipeline counters, job durations, active
     worker telemetry, cluster health, and Go runtime stats for Prometheus &
@@ -530,11 +544,17 @@ configuration setting:
      verified using pure Go `golang.org/x/crypto/argon2` in PHC string format
      (`$argon2id$v=19$m=65536,t=3,p=4$<salt>$<hash>`).
    * **Persistence**: Stored in SQLite `users` table (`username`,
-     `password_hash`, `role`, `is_active`, `created_at`, `last_login`).
-   * **User Lifecycle Management**:
+     `password_hash`, `role`, `is_active`, `must_change_password`,
+     `password_changed_at`, `created_at`, `last_login`).
+   * **User Lifecycle & Password Policy**:
+     * Default forced password change on first login for new users.
+     * Self-service password updates in user settings (`/settings/password`).
+     * Global password rotation interval (e.g. 90d, 180d, 365d).
      * CLI commands: `crucibled user add`, `crucibled user passwd`,
        `crucibled user list`, and `crucibled user delete`.
-     * Web UI management console at `/settings/users`.
+     * Web UI management console at `/settings/users` (admin-only) with
+       interactive user creation modal (username, initial password,
+       role assignment, and must-change-password default toggle).
      * First-boot onboarding setup wizard (`/setup`) when zero users exist.
    * **Playbook Execution**: Subprocesses execute directly as `crucible`
      without requiring kernel credential switching.
@@ -632,6 +652,10 @@ Crucible mandates two-factor authentication for all operators by default
 auth:
   provider: "sqlite" # sqlite | pam
   require_2fa: true  # defaults to true; set false to disable
+  password_policy:
+    require_change_on_first_login: true # defaults to true
+    expiry_interval: "90d"              # e.g. "90d", "180d", "365d", "0"
+    min_length: 12
 ```
 
 When enabled:
@@ -645,13 +669,40 @@ When enabled:
    428 Precondition Required with `{"enrollment_required": true}` if the user
    has no active 2FA devices registered.
 
+### Forced Password Change & Periodic Rotation Policy
+
+Crucible supports enterprise and homelab password hygiene policies:
+1. **Change Password on First Login (Default)**:
+   * When administrators create a user via `crucibled user add` or the Web UI
+     (`/settings/users`), the `must_change_password` flag defaults to `1`
+     (`true`).
+   * Flag `--no-must-change-password` or `--must-change-password=false` allows
+     overriding this behavior for automated service accounts or direct setups.
+   * Upon first login (after completing 2FA if enabled), the user session is
+     redirected to `/settings/password?enforce=true` before granting access to
+     `/operator` or executing jobs.
+2. **Global Password Expiry Intervals**:
+   * Global daemon setting `auth.password_policy.expiry_interval` (e.g.
+     `"90d"`, `"180d"`, `"365d"`, or `"0"` / `""` to disable).
+   * Schema column `password_changed_at DATETIME` tracks last rotation time.
+   * When elapsed duration exceeds `expiry_interval`, user sessions are
+     intercepted and required to rotate passwords before accessing operator
+     routes or mutation endpoints.
+3. **Self-Service Password Management**:
+   * Authenticated operators can update their own password via
+     `/settings/password` by providing current password, new password, and
+     confirmation.
+   * On successful update, `must_change_password` is cleared to `0` and
+     `password_changed_at` is updated to `CURRENT_TIMESTAMP`.
+
 ### User Profile & Account Dropdown Navigation
 
 To keep the primary operations sidebar focused purely on runner pipelines
 (Overview, Schedules, Inspector, Jobs, Clusters, Inventory, Vars), account
 security is housed in an Account Dropdown Menu located in the top-right header:
 1. Displays operator avatar initial, username, role, and auth provider.
-2. Provides direct navigation to **Security & 2FA** (`/settings/2fa`).
+2. Provides direct navigation to **Security & 2FA** (`/settings/2fa`) and
+   **Change Password** (`/settings/password`).
 3. Provides one-click **Sign Out** (`/logout`).
 
 ---
@@ -2049,85 +2100,93 @@ crucible/
     │   ├── broadcaster.go       # Non-blocking fan-out log broadcaster & disk logger
     │   └── pipeline.go          # Pipeline YAML parser & DAG runner
     │
-    ├── auth/                    # Hexagonal CQRS Auth & 2FA Subsystem
+    ├── auth/                    # Hexagonal CQRS Auth & 2FA (Zero SQL in Core)
     │   ├── models.go            # UserIdentity, Role, Device, Session
     │   ├── ports.go             # Inbound CQRS & Outbound SPI ports
     │   ├── commands.go          # CommandService: write mutations
     │   ├── queries.go           # QueryService: read queries
     │   ├── adapter_pam.go       # Pure Go Linux PAM via unix_chkpwd
-    │   ├── adapter_sqlite.go    # SQLite persistence adapter
     │   ├── adapter_memory.go    # In-memory mock adapter
+    │   ├── hasher.go            # Pure Go Argon2id password hasher
     │   ├── totp.go              # Pure Go RFC 6238 TOTP engine
     │   ├── qr.go                # Pure Go SVG & ANSI QR generator
     │   └── crypter.go           # AES-256-GCM envelope encryption
     │
     ├── tokens/                  # Personal Access Tokens (PATs) Feature
-    │   ├── models.go            # APIToken, TokenMetadata (using ULID identifiers)
-    │   └── token.go             # Token generator (cb_pat_...), SHA-256 hasher, validator & revoker
+    │   ├── models.go            # APIToken, TokenMetadata (ULID identifiers)
+    │   ├── ports.go             # Outbound TokenStore port
+    │   └── token.go             # Token generator (cb_pat_...), hasher
     │
     ├── ssh/                     # Built-in SSH Key Management Feature
     │   ├── models.go            # SSHKey (git_sync, ansible_nodes), KeyPair
-    │   ├── generator.go         # Pure Go Ed25519 & RSA 4096-bit keypair generator
+    │   ├── generator.go         # Pure Go Ed25519 & RSA 4096-bit key generator
     │   └── tester.go            # TCP SSH handshake & banner diagnostic tester
     │
     ├── tls/                     # Native HTTPS & Let's Encrypt (ACME) Feature
-    │   ├── certs.go             # Custom .crt/.key loader with hot-reload support
-    │   ├── acme_alpn.go         # Let's Encrypt TLS-ALPN-01 challenge handler (port 443 only)
-    │   ├── acme_dns.go          # Let's Encrypt DNS-01 challenge handler (Cloudflare, Route53, RFC2136)
+    │   ├── certs.go             # Custom .crt/.key loader with hot-reload
+    │   ├── acme_alpn.go         # TLS-ALPN-01 challenge handler (port 443)
+    │   ├── acme_dns.go          # DNS-01 challenge handler
     │   └── manager.go           # Automatic 30-day renewal manager
     │
     ├── schedule/                # Automation Cron & Timer Feature
     │   ├── models.go            # Schedule, TriggerType
-    │   └── scheduler.go         # Cron scheduler (robfig/cron/v3) & one-time timer scheduler
+    │   └── scheduler.go         # Cron scheduler (robfig/cron/v3) & timers
     │
-    ├── reports/                 # Crucible-Style Disk Log Streaming & Sharded Reports
+    ├── reports/                 # Disk Log Streaming & Sharded Reports
     │   ├── models.go            # Report metadata, log chunk models
-    │   ├── broadcaster.go     # Direct disk append & non-blocking subscriber fan-out
-    │   ├── sharding.go        # ULID 2-level directory sharder (var/reports/01/JB/...)
-    │   ├── reader.go          # Late-joining tailing disk reader
-    │   └── handler.go         # HTTP static handler with public/private gatekeeper
+    │   ├── broadcaster.go       # Direct disk append & fan-out hub
+    │   ├── sharding.go          # ULID 2-level directory sharder
+    │   ├── reader.go            # Late-joining tailing disk reader
+    │   └── handler.go           # HTTP static handler with gatekeeper
     │
-    ├── secrets/                 # Secrets Engine & HashiCorp Vault-Style Seal/Unseal
-    │   ├── models.go          # Secret models, vault metadata, seal status
-    │   ├── engine.go          # Sealed/Unsealed state machine, RAM key custodian, lock
-    │   ├── crypto.go          # AES-256-GCM cipher, Argon2id KDF, Shamir shares
-    │   ├── fifo.go            # Pure-Go ephemeral FIFO (named pipe) runner injector
-    │   └── store.go           # Encrypted SQLite repository for vault_secrets & metadata
+    ├── secrets/                 # Secrets Vault & Seal/Unseal Engine
+    │   ├── models.go            # Secret models, vault metadata, seal status
+    │   ├── ports.go             # Outbound SecretStore port
+    │   ├── engine.go            # Sealed/Unsealed state machine, RAM key
+    │   ├── crypto.go            # AES-256-GCM cipher, Argon2id, Shamir
+    │   └── fifo.go              # Ephemeral FIFO (named pipe) runner injector
     │
-    ├── storage/                 # Relational Persistence Engine & Adapters
-    │   ├── models.go            # Status, MigrationRecord, Command/Query models
-    │   ├── ports.go             # Inbound (CommandHandler, QueryHandler) & Outbound (Engine, Transactor)
-    │   ├── commands.go          # CommandService coordinator (RunMigrations)
-    │   ├── queries.go           # QueryService coordinator (GetDatabaseStatus, GetAppliedMigrations)
-    │   ├── adapter_sqlite.go    # Pure Go SQLite adapter (WAL mode, pragmas, schema migrations)
-    │   ├── schema/              # Raw .sql Schema Files (NO SQL in Go files for schema)
-    │   │   ├── 001_initial.sql  # Users, user_totp_devices, totp_invites, ssh_keys, api_tokens, etc.
-    │   │   ├── 002_indexes.sql  # Performance indexes
-    │   │   └── 003_audit_ledger.sql # Audit ledger table, indexes, and anti-tamper triggers
-    │   └── storage_test.go      # Adapter, transaction, and trigger integration tests
+    ├── storage/                 # Centralized Persistence Authority (All SQL)
+    │   ├── models.go            # Status, MigrationRecord, CQRS models
+    │   ├── ports.go             # Inbound & Outbound (Engine, Transactor)
+    │   ├── commands.go          # CommandService (RunMigrations)
+    │   ├── queries.go           # QueryService (GetDatabaseStatus, etc.)
+    │   ├── dialect.go           # SQL dialect abstraction (? vs $1, upserts)
+    │   ├── adapter_sqlite.go    # Pure Go SQLite adapter (modernc.org/sqlite)
+    │   ├── adapter_postgres.go  # Pure Go PostgreSQL adapter (jackc/pgx/v5)
+    │   ├── adapter_mysql.go     # Pure Go MySQL adapter (go-sql-driver/mysql)
+    │   ├── store_auth.go        # Implements auth.UserStore, DeviceStore, etc.
+    │   ├── store_tokens.go      # Implements tokens.TokenStore
+    │   ├── store_audit.go       # Implements audit.AuditStore
+    │   ├── store_secrets.go     # Implements secrets.SecretStore
+    │   ├── schema/              # Raw .sql Schema Files by Engine
+    │   │   ├── sqlite/          # SQLite schema & index migrations
+    │   │   ├── postgres/        # PostgreSQL schema & index migrations
+    │   │   └── mysql/           # MySQL schema & index migrations
+    │   └── storage_test.go      # Adapter, store, transaction, and triggers
     │
     ├── metrics/                 # Prometheus Observability Feature
     │   ├── recorder.go          # Prometheus counters, histograms & gauges
-    │   ├── federation.go        # PeerMetricsRegistry & cross-cluster scrape aggregator
-    │   └── handler.go           # HTTP GET /metrics scraper (cluster-wide vs ?scope=local)
+    │   ├── federation.go        # Cross-cluster scrape aggregator
+    │   └── handler.go           # HTTP GET /metrics scraper
     │
     ├── notify/                  # Hierarchical Email & Alerts Engine
-    │   ├── models.go            # NotificationConfig, ResolvedNotification, EmailMessage
-    │   ├── resolver.go          # 3-tier hierarchy resolver (task -> cluster -> pipeline)
-    │   ├── sender.go            # SMTP client (TLS/STARTTLS, MIME attachment builder)
-    │   ├── tokens.go            # Signed report view token generator & validator
+    │   ├── models.go            # NotificationConfig, ResolvedNotification
+    │   ├── resolver.go          # 3-tier hierarchy resolver
+    │   ├── sender.go            # SMTP client (TLS/STARTTLS, attachments)
+    │   ├── tokens.go            # Signed report view token generator
     │   └── dispatch.go          # Webhook dispatcher for external systems
     │
-    ├── logging/                 # Operational Structured Logging Feature (slog)
-    │   ├── logger.go            # slog initialization, stdout/stderr streaming, dynamic LevelVar
-    │   └── context.go           # Contextual tracing attributes (request_id, run_ulid, actor_id)
+    ├── logging/                 # Operational Structured Logging (slog)
+    │   ├── logger.go            # slog init, stdout/stderr streaming
+    │   └── context.go           # Contextual tracing attributes
     │
-    ├── audit/                   # Cryptographic Immutable Audit Ledger Feature
-    │   ├── models.go            # AuditEvent domain models, action slugs, actor types
-    │   ├── hasher.go            # Canonical SHA-256 record hash calculation & genesis seeding
-    │   ├── recorder.go          # Append-only ledger recorder linking previous_hash to HEAD
-    │   ├── verifier.go          # Full chain validation engine verifying sequence and hashes
-    │   └── store.go             # SQLite store queries for audit_ledger table
+    ├── audit/                   # Cryptographic Immutable Audit Ledger
+    │   ├── models.go            # AuditEvent domain models, action slugs
+    │   ├── ports.go             # Outbound AuditStore port
+    │   ├── hasher.go            # Canonical SHA-256 record hash calculation
+    │   ├── recorder.go          # Append-only ledger linking previous_hash
+    │   └── verifier.go          # Full chain validation engine
     │
     └── events/                  # In-Memory Event Bus
         ├── bus.go               # Pub/sub event broker
@@ -2139,12 +2198,23 @@ crucible/
 ## 20. Database Schema Architecture (External `.sql` Files)
 
 > [!IMPORTANT]
-> **Strict Separation Guarantee**: All SQL statements for table creation,
-> schema versions, and indexes reside exclusively in external `.sql` files
-> (`internal/storage/schema/*.sql`). Zero SQL schema definition statements
-> exist inside Go `.go` source files.
-> The storage engine embeds these files via Go `//go:embed schema/*.sql` and
-> executes them automatically upon startup in `internal/storage/migrate.go`.
+> **Centralized Persistence Authority**: `internal/storage` is the single
+> package in Crucible permitted to execute SQL statements, manage database
+> pools, or import database drivers. Domain modules (`internal/auth`,
+> `internal/tokens`, `internal/audit`, `internal/secrets`, etc.) contain
+> **zero lines of SQL** and define their persistence needs strictly as
+> outbound ports (`ports.go`).
+>
+> **Strict External Schema Separation**: All SQL statements for table
+> creation, schema migrations, and indexes reside exclusively in external
+> `.sql` files under `internal/storage/schema/`. The storage engine embeds
+> these files via Go `//go:embed` and runs them automatically upon startup.
+>
+> **Multi-Database Extensibility**: Pure Go SQLite (`modernc.org/sqlite`),
+> PostgreSQL (`jackc/pgx/v5`), and MySQL (`go-sql-driver/mysql`) engines are
+> supported through `storage.Engine` adapters and a lightweight dialect
+> translator (`internal/storage/dialect.go`).
+>
 > **ULID Standard**: All entity primary keys use 26-character, time-ordered,
 > URL-safe ULID identifiers.
 
@@ -2194,12 +2264,17 @@ CREATE TABLE IF NOT EXISTS worker_nodes (
     last_ping     DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
--- Users (Identity & Role Overrides)
+-- Users (Identity & Credentials)
 CREATE TABLE IF NOT EXISTS users (
-    username      TEXT PRIMARY KEY,
-    role_override TEXT,                    -- Optional manual role override (e.g. 'admin')
-    created_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    last_login    DATETIME
+    username             TEXT PRIMARY KEY,
+    password_hash        TEXT,             -- Argon2id PHC string
+    role                 TEXT NOT NULL DEFAULT 'viewer',
+    role_override        TEXT,             -- Optional manual role override
+    is_active            INTEGER NOT NULL DEFAULT 1,
+    must_change_password INTEGER NOT NULL DEFAULT 1,
+    password_changed_at  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    created_at           DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    last_login           DATETIME
 );
 
 -- Multi-Device Two-Factor Authentication (Multiple TOTP Tokens per User)
@@ -2824,25 +2899,65 @@ operator CLI and an embedded Web management console.
 #### Milestone 1-07b: Native SQLite Users & Rootless Auth Engine
 * Implement pure Go Argon2id password hashing in `internal/auth/hasher.go`
   utilizing `golang.org/x/crypto/argon2` with PHC string formatting.
-* Author raw SQL migration `004_users_auth.sql`:
-  * Add `password_hash TEXT`, `role TEXT NOT NULL DEFAULT 'viewer'`, and
-    `is_active INTEGER NOT NULL DEFAULT 1` to `users` table.
+* Author raw SQL migrations:
+  * `004_users_auth.sql`: Add `password_hash TEXT`, `role TEXT NOT NULL
+    DEFAULT 'viewer'`, and `is_active INTEGER NOT NULL DEFAULT 1` to `users`.
+  * `005_password_lifecycle.sql`: Add `must_change_password INTEGER NOT NULL
+    DEFAULT 1` and `password_changed_at DATETIME NOT NULL DEFAULT
+    CURRENT_TIMESTAMP` to `users` table.
 * Implement `SQLiteAuthenticator` (`internal/auth/adapter_sqlite.go`)
   satisfying the `Authenticator` SPI port:
   * Verifies Argon2id hashes, retrieves user roles, and verifies active state.
   * Enables 100% rootless production execution under `User=crucible`.
+* Global password policy configuration (`internal/config`):
+  * `auth.password_policy.expiry_interval` (e.g. 90d, 180d, 365d, 0/off).
+  * `auth.password_policy.require_change_on_first_login` (defaults to true).
+  * `auth.password_policy.min_length` (defaults to 12).
 * Wire CLI user lifecycle commands (`cmd/crucibled/user.go`):
-  * `crucibled user add --username <user> --role <role>` (prompts password).
+  * `crucibled user add --username <user> --role <role>` (prompts password;
+    `--must-change-password` defaults to `true`).
   * `crucibled user passwd <user>` (secure password update).
   * `crucibled user list` (tabular user list with role and last login).
   * `crucibled user delete <user>` (with confirmation prompt).
-* Wire Web UI views:
-  * `/settings/users`: User administration table with role badges and actions.
+* Wire Web UI views & access walls:
+  * `/settings/password`: Self-service password change view with current
+    password verification.
+  * Forced password change wall: Enforces redirect to
+    `/settings/password?enforce=true` upon first login or expired interval.
+  * `/settings/users`: Admin-only user administration console featuring:
+    * User inventory table showing role badges, active status, last login,
+      and password rotation timestamps.
+    * Interactive "Add User" modal allowing administrators to provision new
+      accounts directly from the Web UI (username, initial password,
+      role selection, and default `must_change_password` toggle).
+    * Administrative user actions: reset password, toggle active/inactive,
+      change role, and delete user (with confirmation modal).
   * `/setup`: First-boot onboarding setup wizard if zero admin accounts exist.
 * **Verification**: Add users via CLI, log in via Web UI and CLI without root,
-  verify Argon2id verification with race detector, test user deactivation.
+  verify Argon2id verification with race detector, test user deactivation,
+  first-login password change enforcement, and expiry interval rejection.
+
+#### Milestone 1-07c: Decouple Public Portal (/) and Operator Console (/operator)
+* Decouple public landing page and authenticated operator workspace:
+  * Mount authenticated Operations Control Plane at `/operator`
+    (`dashboard.html` with `base.html`), requiring an active session
+    (auto-redirects unauthenticated visits to `/login?next=/operator`).
+  * Implement standalone Public Execution Monitor at `/`
+    (`public_dashboard.html`): clean centered layout without sidebar,
+    database diagnostics, or internal server metrics.
+  * Provide top-right action button: `[Sign In]` (for guests) or
+    `[Go to Operator Console →]` (for authenticated operators).
+  * Update login and 2FA redirects to target `/operator` by default.
+  * Update `web/templates/base.html` navigation links to anchor to `/operator`.
+* **Verification**: Visit `/` anonymously (renders public monitor, 200 OK);
+  visit `/operator` anonymously (redirects to `/login?next=/operator`, 302);
+  log in and verify redirect to `/operator` with full command sidebar.
 
 #### Milestone 1-08: Personal Access Tokens Subsystem (`internal/tokens/`)
+* Define `TokenStore` outbound port in `internal/tokens/ports.go` with zero
+  database imports or SQL statements.
+* Implement `internal/storage/store_tokens.go` satisfying `TokenStore`
+  (persisting hashed tokens in SQLite `api_tokens` table).
 * Implement high-entropy token generation (`cb_pat_<32-byte-hex>`) with SHA-256
   storage in SQLite `api_tokens` table.
 * Implement token scope validator and permission model (`admin`, `operator`,
@@ -2862,6 +2977,10 @@ operator CLI and an embedded Web management console.
   with token, verify CLI commands authenticate successfully with token.
 
 #### Milestone 1-09: Cryptographic Audit Ledger Subsystem (`internal/audit/`)
+* Define `AuditStore` outbound port in `internal/audit/ports.go` with zero
+  database imports or SQL statements.
+* Implement `internal/storage/store_audit.go` satisfying `AuditStore`
+  (inserting append-only ledger entries and reading verification chains).
 * Implement append-only cryptographic audit recorder in `internal/audit/`:
   * Compute SHA-256 hash chains (`record_hash = SHA256(prev_hash + fields)`).
   * Genesis block linking with 64 zero characters for root entry.
@@ -2881,6 +3000,10 @@ operator CLI and an embedded Web management console.
   both interfaces, run chain verification, and test anti-tamper triggers.
 
 #### Milestone 1-10: Secrets Vault Engine (`internal/secrets/`)
+* Define `SecretStore` outbound port in `internal/secrets/ports.go` with zero
+  database imports or SQL statements.
+* Implement `internal/storage/store_secrets.go` satisfying `SecretStore`
+  (persisting encrypted vault blobs and metadata in SQLite).
 * Implement AES-256-GCM + Argon2id envelope encryption engine in
   `internal/secrets/`.
 * Implement seal/unseal state machine supporting master passphrases and Shamir
@@ -2919,17 +3042,24 @@ operator CLI and an embedded Web management console.
     `var/reports/{shard}/{run_ulid}_{job_slug}.log`.
   * Non-blocking fan-out channel broadcaster (`chan LogChunk, capacity 256`).
 * Enforce public vs. private job visibility:
-  * Public jobs visible on anonymous dashboard.
+  * Public jobs visible on standalone public portal (`public_runs.html`) with
+    strictly read-only access (zero run/cancel buttons).
   * Private jobs return `404 Not Found` to unauthenticated visitors.
 * Wire Operator CLI commands:
   * `crucibled run <playbook.yaml> [--inventory <inv>] [--vault-secret <sec>]`
   * `cruciblectl run <playbook.yaml> [--follow]`
   * `cruciblectl logs <run-ulid> [-f]` (streams live logs or tails from disk).
 * Wire Web UI views:
-  * `/`: Dashboard showing active, completed, and queued runs.
-  * `/runs/{ulid}`: Live execution console with `xterm.js` / SSE streaming and
-    late-joining catch-up disk reader.
-  * `/reports/{shard}/{ulid}_{slug}.html`: Embedded HTML report viewer.
+  * `/`: Standalone Public Runs Portal (`public_runs.html`): clean centered
+    build monitor without sidebar or diagnostics, strictly read-only with
+    `[Sign In]` button.
+  * `/operator`: Authenticated Operations Control Plane (`dashboard.html` with
+    `base.html`), unlocking command sidebar, engine diagnostics, and action
+    triggers (auto-redirects unauthenticated visits to `/login?next=/operator`).
+  * `/runs/{ulid}`: Execution log viewer with `xterm.js` / SSE streaming and
+    late-joining reader (read-only for guests, actions for operators).
+  * `/reports/{shard}/{ulid}_{slug}.html`: Embedded HTML report viewer
+    (public runs accessible freely; private runs protected by session/token).
 * **Verification**: Run playbook from CLI, watch live terminal logs, watch
   simultaneous live web console in browser, verify anonymous 404 isolation.
 
@@ -3002,7 +3132,25 @@ dedicated worker management in both CLI and Web UI.
 * **Verification**: Drain worker via Web UI, verify CLI reflects `DRAIN` badge,
   verify in-flight tasks finish while new tasks are paused.
 
-#### Milestone 2-05: Release v0.2.0 Verification & Tagging
+#### Milestone 2-05: Storage Subsystem Centralization & Dialect Layer
+* Centralize all authentication persistence inside `internal/storage/`:
+  * Migrate `internal/auth/adapter_sqlite.go` into
+    `internal/storage/store_auth.go` satisfying `auth.UserStore`,
+    `auth.DeviceStore`, and `auth.SessionStore`.
+  * Ensure `internal/auth` contains zero SQL statements and zero database
+    driver imports.
+* Implement lightweight SQL dialect translator (`internal/storage/dialect.go`):
+  * Dynamic parameter placeholder re-binding (`?` for SQLite/MySQL vs `$1, $2`
+    for PostgreSQL).
+  * Dialect-aware upsert helpers (`INSERT OR REPLACE` vs `ON CONFLICT`).
+* Restructure raw schema migrations under `internal/storage/schema/` into
+  engine-specific migration directories (`schema/sqlite/`,
+  `schema/postgres/`, `schema/mysql/`).
+* **Verification**: Run entire test suite (`make all`) and confirm all auth,
+  device, session, and user tests pass with persistence hosted in
+  `internal/storage`.
+
+#### Milestone 2-06: Release v0.2.0 Verification & Tagging
 * Verify drain lifecycle: drain worker, confirm zero new tasks dispatched,
   verify in-flight task completes, confirm node goes to maintenance ready.
 * Verify watchdog: kill worker, confirm `DOWN` badge and job failover.
@@ -3033,7 +3181,22 @@ upstream Git synchronization, and the Web Variables Studio.
   `git pull --ff-only` (<500ms) across all peers.
 * 5-minute fallback background sync timer.
 
-#### Milestone 3-04: NetBox Dynamic Inventory & Web Variables Studio
+#### Milestone 3-04: PostgreSQL & MySQL Enterprise Persistence Engines
+* Implement pure Go PostgreSQL engine adapter in
+  `internal/storage/adapter_postgres.go` utilizing `jackc/pgx/v5/stdlib`
+  satisfying `storage.Engine` (strictly CGO_ENABLED=0).
+* Implement pure Go MySQL engine adapter in
+  `internal/storage/adapter_mysql.go` utilizing `go-sql-driver/mysql`
+  satisfying `storage.Engine` (strictly CGO_ENABLED=0).
+* Author external raw SQL schemas under `internal/storage/schema/postgres/`
+  and `internal/storage/schema/mysql/`.
+* Wire CLI flags (`--storage-driver`, `--database-endpoint`) and config
+  keys (`storage.driver: "postgres" | "mysql" | "sqlite"`).
+* **Verification**: Run integration test suite against containerized
+  PostgreSQL and MySQL instances, verifying schema migrations, transactions,
+  and all domain store operations.
+
+#### Milestone 3-05: NetBox Dynamic Inventory & Web Variables Studio
 * Implement bidirectional YAML/INI inventory parser (`internal/ansible/`).
 * Implement NetBox dynamic inventory plugin caching topology in SQLite.
 * Implement variable precedence engine calculating merged effective variables
@@ -3042,7 +3205,7 @@ upstream Git synchronization, and the Web Variables Studio.
 * Wire Web UI: `/inventory` and `/vars` split-pane editor, syntax validator,
   variable precedence inspector, and atomic save & Git broadcast button.
 
-#### Milestone 3-05: Release v0.3.0 Verification & Tagging
+#### Milestone 3-06: Release v0.3.0 Verification & Tagging
 * Verify dual-controller cluster: schedule recurring job, confirm exactly-once
   execution via fencing lease.
 * Verify Git commit broadcast: push commit to Controller A, confirm

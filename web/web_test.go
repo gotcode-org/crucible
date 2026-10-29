@@ -21,6 +21,7 @@ func TestWebFS_EmbeddedAssets(t *testing.T) {
 	expectedFiles := []string{
 		"templates/base.html",
 		"templates/dashboard.html",
+		"templates/public_dashboard.html",
 		"templates/login.html",
 		"templates/2fa.html",
 		"templates/enforce_2fa.html",
@@ -239,6 +240,56 @@ func TestRenderTemplate_Settings2FA(t *testing.T) {
 		!strings.Contains(html, "JBSWY3DPEHPK3PXP") ||
 		!strings.Contains(html, "Two-Factor Authentication Required") {
 		t.Errorf("rendered settings_2fa missing expected content")
+	}
+}
+
+func TestRenderStandalone_PublicDashboard(t *testing.T) {
+	t.Parallel()
+
+	var buf bytes.Buffer
+	err := web.RenderStandalone(&buf, "public_dashboard.html", map[string]any{
+		"Title":           "Public Monitor",
+		"Version":         "v0.1.0",
+		"HTTPBind":        "127.0.0.1",
+		"HTTPPort":        8080,
+		"DaemonMode":      "standalone",
+		"IsAuthenticated": false,
+		"Uptime":          "12m 30s",
+	})
+	if err != nil {
+		t.Fatalf("RenderStandalone public_dashboard.html failed: %v", err)
+	}
+	html := buf.String()
+	if !strings.Contains(html, "Public Pipeline Monitor") ||
+		!strings.Contains(html, "Operator Sign In") ||
+		!strings.Contains(html, "Sovereign Execution") {
+		t.Errorf("public_dashboard template missing expected content")
+	}
+
+	var authBuf bytes.Buffer
+	err = web.RenderStandalone(
+		&authBuf,
+		"public_dashboard.html",
+		map[string]any{
+			"Title":           "Public Monitor",
+			"Version":         "v0.1.0",
+			"HTTPBind":        "127.0.0.1",
+			"HTTPPort":        8080,
+			"DaemonMode":      "standalone",
+			"IsAuthenticated": true,
+			"OperatorUser":    "alice",
+			"OperatorRole":    "admin",
+			"Uptime":          "12m 30s",
+		},
+	)
+	if err != nil {
+		t.Fatalf("RenderStandalone auth public_dashboard failed: %v", err)
+	}
+	authHTML := authBuf.String()
+	if !strings.Contains(authHTML, "alice") ||
+		!strings.Contains(authHTML, "ADMIN") ||
+		!strings.Contains(authHTML, "Console") {
+		t.Errorf("auth public_dashboard missing expected content")
 	}
 }
 

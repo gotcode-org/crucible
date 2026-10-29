@@ -112,11 +112,38 @@ Format: `[state] (Priority) [domain/binary] Task description @assignee +tag`
 - [x] (B) [web] Implement header Account Dropdown Menu and mandatory 2FA
       enforcement policy when auth.require_2fa is enabled @jovens@gotcode.org
       +phase1 +web +auth
-- [ ] (B) [web] Implement Web UI /settings/users management view and initial
-      admin bootstrap wizard @jovens@gotcode.org +phase1 +web +auth
+- [x] (A) [web] Decouple Public Portal (/) and Operator Console (/operator):
+      move operational dashboard to /operator behind auth, and implement
+      standalone public monitor at / (public_dashboard.html)
+      @jovens@gotcode.org +phase1 +web +security
+- [ ] (A) [storage] Author schema migration 005_password_lifecycle.sql adding
+      must_change_password and password_changed_at to users table
+      @jovens@gotcode.org +phase1 +storage +auth
+- [ ] (B) [config] Add auth.password_policy (require_change_on_first_login,
+      expiry_interval, min_length) to ServerConfig @jovens@gotcode.org +phase1
+      +config +auth
+- [ ] (B) [crucibled] Add --must-change-password flag (default true) and
+      --no-must-change-password to crucibled user add @jovens@gotcode.org
+      +phase1 +crucibled +auth
+- [ ] (A) [auth] Implement password expiry check and first-login change
+      enforcement logic in internal/auth @jovens@gotcode.org +phase1 +auth
+      +security
+- [ ] (B) [web] Implement Web UI /settings/password view for self-service
+      password updates and forced-change redirect barrier @jovens@gotcode.org
+      +phase1 +web +auth
+- [ ] (A) [web] Implement admin user creation modal on /settings/users:
+      provision new users (username, initial password, role selector, and
+      must-change-password default toggle) @jovens@gotcode.org +phase1 +web
+      +auth +security
+- [ ] (B) [web] Implement Web UI /settings/users management view (user list,
+      role badges, toggle active, reset password, delete modal) and
+      first-boot setup wizard @jovens@gotcode.org +phase1 +web +auth
 - [ ] (B) [crucibled] Add rootless service account (User=crucible) vs PAM
       (User=root) profiles to systemd unit command @jovens@gotcode.org +phase1
       +crucibled +systemd
+- [ ] (A) [tokens] Define TokenStore outbound port in internal/tokens/ports.go
+      and implement internal/storage/store_tokens.go in SQLite
+      @jovens@gotcode.org +phase1 +tokens +storage
 - [ ] (A) [tokens] Implement internal/tokens package with high-entropy token
       generator, SHA-256 hashing, and scope validator @jovens@gotcode.org
       +phase1 +tokens +security
@@ -125,6 +152,9 @@ Format: `[state] (Priority) [domain/binary] Task description @assignee +tag`
       +cruciblectl +tokens
 - [ ] (B) [web] Implement Web UI /settings/tokens view for token creation,
       one-click copy, and revocation @jovens@gotcode.org +phase1 +web +tokens
+- [ ] (A) [audit] Define AuditStore outbound port in internal/audit/ports.go
+      and implement internal/storage/store_audit.go in SQLite
+      @jovens@gotcode.org +phase1 +audit +storage
 - [ ] (A) [audit] Implement internal/audit package with append-only SHA-256
       hash chain recorder and genesis block linking @jovens@gotcode.org +phase1
       +audit +security
@@ -134,6 +164,9 @@ Format: `[state] (Priority) [domain/binary] Task description @assignee +tag`
 - [ ] (B) [web] Implement Web UI /audit view with timeline filters, metadata
       diff drawer, and chain validation badge @jovens@gotcode.org +phase1 +web
       +audit
+- [ ] (A) [secrets] Define SecretStore outbound port in
+      internal/secrets/ports.go and implement internal/storage/store_secrets.go
+      in SQLite @jovens@gotcode.org +phase1 +secrets +storage
 - [ ] (A) [secrets] Implement internal/secrets package with AES-256-GCM +
       Argon2id envelope encryption at rest @jovens@gotcode.org +phase1 +secrets
       +security
@@ -161,10 +194,14 @@ Format: `[state] (Priority) [domain/binary] Task description @assignee +tag`
       @jovens@gotcode.org +phase1 +cruciblectl +engine
 - [ ] (B) [cruciblectl] Implement cruciblectl logs command with -f streaming
       and disk catch-up @jovens@gotcode.org +phase1 +cruciblectl +reports
-- [ ] (A) [web] Implement Web UI dashboard (/), live xterm.js execution console
-      (/runs/{ulid}), and report viewer @jovens@gotcode.org +phase1 +web
+- [ ] (A) [web] Implement standalone Public Runs Portal at / (public_runs.html)
+      showing public runs feed, read-only logs, and HTML reports with zero
+      operator action buttons @jovens@gotcode.org +phase1 +web +security
+- [ ] (A) [web] Implement authenticated operations console at /operator
+      (dashboard.html + base.html) with command sidebar, engine diagnostics,
+      and RBAC controls @jovens@gotcode.org +phase1 +web
 - [ ] (A) [web] Enforce anti-enumeration 404 Not Found for anonymous access to
-      private runs @jovens@gotcode.org +phase1 +web +security
+      private runs and reports @jovens@gotcode.org +phase1 +web +security
 - [ ] (B) [notify] Implement internal/notify package with 3-tier recipient
       resolver and Outlook MSO table templates @jovens@gotcode.org +phase1
       +notify
@@ -198,6 +235,15 @@ Format: `[state] (Priority) [domain/binary] Task description @assignee +tag`
 - [ ] (A) [cruciblectl] Implement cruciblectl node list, drain,
       activate, pause, and status commands @jovens@gotcode.org +phase2
       +cruciblectl +cluster
+- [ ] (A) [storage] Migrate auth SQL logic from internal/auth/adapter_sqlite.go
+      into internal/storage/store_auth.go, achieving zero SQL in internal/auth
+      @jovens@gotcode.org +phase2 +storage +auth
+- [ ] (B) [storage] Implement SQL dialect abstraction (? vs $1 placeholders,
+      upsert syntax) in internal/storage/dialect.go @jovens@gotcode.org +phase2
+      +storage
+- [ ] (B) [storage] Partition schema migrations into engine subdirectories
+      (schema/sqlite/, schema/postgres/, schema/mysql/) @jovens@gotcode.org
+      +phase2 +storage
 - [ ] (A) [shared] Execute worker drain and failover verification suite and
       cut release v0.2.0 tag @jovens@gotcode.org +phase2 +release
 
@@ -212,6 +258,15 @@ Format: `[state] (Priority) [domain/binary] Task description @assignee +tag`
       commit, and push via deploy keys @jovens@gotcode.org +phase3 +git
 - [ ] (A) [git] Implement sub-500ms P2P commit broadcaster over gRPC
       BroadcastCommit with 5m fallback ticker @jovens@gotcode.org +phase3 +git
+- [ ] (A) [storage] Implement pure Go PostgreSQL engine adapter (jackc/pgx/v5)
+      satisfying storage.Engine in internal/storage/adapter_postgres.go
+      @jovens@gotcode.org +phase3 +storage
+- [ ] (A) [storage] Implement pure Go MySQL engine adapter (go-sql-driver/mysql)
+      satisfying storage.Engine in internal/storage/adapter_mysql.go
+      @jovens@gotcode.org +phase3 +storage
+- [ ] (B) [storage] Author external raw SQL schemas under
+      internal/storage/schema/postgres/ and internal/storage/schema/mysql/
+      @jovens@gotcode.org +phase3 +storage
 - [ ] (B) [ansible] Implement YAML and INI inventory parser with group/host
       hierarchies in internal/ansible @jovens@gotcode.org +phase3 +ansible
 - [ ] (B) [ansible] Implement NetBox dynamic inventory plugin and SQLite

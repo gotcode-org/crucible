@@ -85,6 +85,7 @@ type LoginPageContext struct {
 	AuthProvider string
 	Username     string
 	Error        string
+	Next         string
 }
 
 // TwoFactorPageContext carries view model data for standalone 2fa.html.
@@ -92,6 +93,7 @@ type TwoFactorPageContext struct {
 	Username       string
 	ChallengeToken string
 	Error          string
+	Next           string
 }
 
 // Settings2FAPageContext carries view model data for settings_2fa.html.
@@ -103,4 +105,21 @@ type Settings2FAPageContext struct {
 	Enforced     bool
 	Message      string
 	Error        string
+}
+
+// PublicDashboardContext carries view model data for standalone
+// public_dashboard.html.
+type PublicDashboardContext struct {
+	Title           string
+	Version         string
+	HTTPBind        string
+	HTTPPort        int
+	DaemonMode      string
+	IsAuthenticated bool
+	OperatorUser    string
+	OperatorRole    string
+	Uptime          string
+	StartedAt       time.Time
+	DatabaseDriver  string
+	IntegrityOK     bool
 }

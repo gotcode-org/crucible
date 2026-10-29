@@ -61,6 +61,9 @@
 
       <form action="/auth/2fa" method="POST" class="space-y-6">
         <input type="hidden" name="challenge_token" value="{{ .ChallengeToken }}" />
+        {{ if .Next }}
+        <input type="hidden" name="next" value="{{ .Next }}" />
+        {{ end }}
 
         <div>
           <label for="passcode" class="block text-xs font-mono uppercase tracking-wider text-zinc-400 mb-2">6-Digit Passcode</label>
