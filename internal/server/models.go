@@ -10,18 +10,21 @@ import (
 	"os"
 	"time"
 
+	"gotcode.org/crucible/internal/auth"
 	"gotcode.org/crucible/internal/storage"
 )
 
 // Config defines network binding, socket, and runtime parameters for the HTTP
 // server.
 type Config struct {
-	HTTPBind   string
-	HTTPPort   int
-	SocketPath string
-	SocketMode os.FileMode
-	DaemonMode string
-	Version    string
+	HTTPBind     string
+	HTTPPort     int
+	SocketPath   string
+	SocketMode   os.FileMode
+	DaemonMode   string
+	Version      string
+	AuthProvider string
+	Require2FA   bool
 }
 
 // DatabaseHealth captures operational metrics reported by /healthz.
@@ -65,9 +68,39 @@ type PageContext struct {
 	SocketPath   string
 	DaemonMode   string
 	OperatorUser string
+	OperatorRole string
+	AuthProvider string
 	AuthState    string
 	Uptime       string
 	StartedAt    time.Time
 	Storage      *storage.Status
 	Migrations   []storage.MigrationRecord
+	Message      string
+	Error        string
+}
+
+// LoginPageContext carries view model data for standalone login.html.
+type LoginPageContext struct {
+	Version      string
+	AuthProvider string
+	Username     string
+	Error        string
+}
+
+// TwoFactorPageContext carries view model data for standalone 2fa.html.
+type TwoFactorPageContext struct {
+	Username       string
+	ChallengeToken string
+	Error          string
+}
+
+// Settings2FAPageContext carries view model data for settings_2fa.html.
+type Settings2FAPageContext struct {
+	PageContext
+	Devices      []auth.TOTPDevice
+	EnrollPrep   *auth.PrepareEnrollmentResult
+	InviteResult *auth.TOTPInvite
+	Enforced     bool
+	Message      string
+	Error        string
 }

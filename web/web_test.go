@@ -21,6 +21,10 @@ func TestWebFS_EmbeddedAssets(t *testing.T) {
 	expectedFiles := []string{
 		"templates/base.html",
 		"templates/dashboard.html",
+		"templates/login.html",
+		"templates/2fa.html",
+		"templates/enforce_2fa.html",
+		"templates/settings_2fa.html",
 		"static/css/style.css",
 		"static/js/app.js",
 	}
@@ -110,12 +114,131 @@ func TestRenderTemplate_Dashboard(t *testing.T) {
 		"003_audit_ledger.sql",
 		"/run/crucibled/crucible.sock",
 		"GET /healthz",
+		"account-menu-btn",
+		"account-dropdown",
 	}
 
 	for _, substr := range expectedSubstrings {
 		if !strings.Contains(html, substr) {
 			t.Errorf("rendered template missing expected substring %q", substr)
 		}
+	}
+}
+
+func TestRenderStandalone_LoginAnd2FA(t *testing.T) {
+	t.Parallel()
+
+	var loginBuf bytes.Buffer
+	err := web.RenderStandalone(&loginBuf, "login.html", map[string]any{
+		"Version":  "v0.1.0",
+		"Username": "operator",
+		"Error":    "invalid credentials",
+	})
+	if err != nil {
+		t.Fatalf("RenderStandalone login.html failed: %v", err)
+	}
+	loginHTML := loginBuf.String()
+	if !strings.Contains(loginHTML, "Operator Authentication") ||
+		!strings.Contains(loginHTML, "invalid credentials") {
+		t.Errorf("login template missing expected content")
+	}
+	if !strings.Contains(loginHTML, "Native SQLite / TOTP 2FA") {
+		t.Errorf("login template default missing Native SQLite badge")
+	}
+
+	var pamBuf bytes.Buffer
+	err = web.RenderStandalone(&pamBuf, "login.html", map[string]any{
+		"Version":      "v0.1.0",
+		"AuthProvider": "pam",
+	})
+	if err != nil {
+		t.Fatalf("RenderStandalone pam login.html failed: %v", err)
+	}
+	if !strings.Contains(pamBuf.String(), "Linux PAM / TOTP 2FA") {
+		t.Errorf("login template missing Linux PAM badge")
+	}
+
+	var twofaBuf bytes.Buffer
+	err = web.RenderStandalone(&twofaBuf, "2fa.html", map[string]any{
+		"Username":       "operator",
+		"ChallengeToken": "ch_test_123",
+	})
+	if err != nil {
+		t.Fatalf("RenderStandalone 2fa.html failed: %v", err)
+	}
+	twofaHTML := twofaBuf.String()
+	if !strings.Contains(twofaHTML, "Two-Factor Verification") ||
+		!strings.Contains(twofaHTML, "ch_test_123") {
+		t.Errorf("2fa template missing expected content")
+	}
+}
+
+func TestRenderStandalone_Enforce2FA(t *testing.T) {
+	t.Parallel()
+
+	var buf bytes.Buffer
+	err := web.RenderStandalone(&buf, "enforce_2fa.html", map[string]any{
+		"OperatorUser": "operator",
+		"Error":        "invalid 2fa passcode",
+		"EnrollPrep": map[string]any{
+			"SecretBase32": "JBSWY3DPEHPK3PXP",
+			"QRCodeSVG":    "<svg></svg>",
+		},
+	})
+	if err != nil {
+		t.Fatalf("RenderStandalone enforce_2fa.html failed: %v", err)
+	}
+	html := buf.String()
+	if !strings.Contains(html, "Two-Factor Authentication Required") ||
+		!strings.Contains(html, "JBSWY3DPEHPK3PXP") ||
+		!strings.Contains(html, "invalid 2fa passcode") {
+		t.Errorf("enforce_2fa template missing expected content")
+	}
+	if strings.Contains(html, "<aside") ||
+		strings.Contains(html, "account-menu-btn") {
+		t.Errorf("enforce_2fa should not contain sidebar or account menu")
+	}
+}
+
+func TestRenderTemplate_Settings2FA(t *testing.T) {
+	t.Parallel()
+
+	data := map[string]any{
+		"Title":        "Security & 2FA",
+		"Version":      "v0.1.0",
+		"ActiveNav":    "settings_2fa",
+		"Breadcrumb":   "SECURITY / 2FA",
+		"HTTPBind":     "127.0.0.1",
+		"HTTPPort":     8080,
+		"DaemonMode":   "standalone",
+		"OperatorUser": "root",
+		"AuthState":    "AUTHENTICATED",
+		"Storage": &storage.Status{
+			Driver: "sqlite",
+		},
+		"Devices": []map[string]any{
+			{
+				"ID":        "dev_01JBC",
+				"Name":      "YubiKey Primary",
+				"CreatedAt": time.Now().UTC(),
+			},
+		},
+		"EnrollPrep": map[string]any{
+			"SecretBase32": "JBSWY3DPEHPK3PXP",
+			"QRCodeSVG":    "<svg></svg>",
+		},
+		"Enforced": true,
+	}
+
+	var buf bytes.Buffer
+	if err := web.RenderTemplate(&buf, "settings_2fa.html", data); err != nil {
+		t.Fatalf("RenderTemplate settings_2fa.html failed: %v", err)
+	}
+	html := buf.String()
+	if !strings.Contains(html, "YubiKey Primary") ||
+		!strings.Contains(html, "JBSWY3DPEHPK3PXP") ||
+		!strings.Contains(html, "Two-Factor Authentication Required") {
+		t.Errorf("rendered settings_2fa missing expected content")
 	}
 }
 

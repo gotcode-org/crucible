@@ -72,6 +72,7 @@ type ServerConfig struct {
 	Cluster ClusterConfig  `yaml:"cluster"`
 	Logging LoggingConfig  `yaml:"logging"`
 	TLS     TLSConfig      `yaml:"tls"`
+	Auth    AuthConfig     `yaml:"auth"`
 }
 
 // ServerSettings defines listener bindings and socket endpoints.
@@ -132,6 +133,15 @@ type TLSConfig struct {
 	ACMEEnabled bool   `yaml:"acme_enabled"`
 	ACMEDomain  string `yaml:"acme_domain"`
 	ACMEEmail   string `yaml:"acme_email"`
+}
+
+// AuthConfig defines operator authentication and group mapping policies.
+type AuthConfig struct {
+	Provider         string   `yaml:"provider"`
+	Require2FA       bool     `yaml:"require_2fa"`
+	AdminGroups      []string `yaml:"admin_groups"`
+	OperatorGroups   []string `yaml:"operator_groups"`
+	RestrictToGroups bool     `yaml:"restrict_to_groups"`
 }
 
 // ClientConfig encapsulates client connection profiles for cruciblectl.
@@ -209,6 +219,22 @@ func DefaultServerConfig(prod bool) *ServerConfig {
 			ACMEDomain:  "",
 			ACMEEmail:   "",
 		},
+		Auth: AuthConfig{
+			Provider:   "sqlite",
+			Require2FA: true,
+			AdminGroups: []string{
+				"root",
+				"wheel",
+				"sudo",
+				"adm",
+				"crucible-admin",
+			},
+			OperatorGroups: []string{
+				"operator",
+				"crucible-operator",
+			},
+			RestrictToGroups: true,
+		},
 	}
 
 	if prod {
@@ -276,7 +302,11 @@ func (c *ServerConfig) Validate() error {
 		return err
 	}
 
-	return c.validateTLS()
+	if err := c.validateTLS(); err != nil {
+		return err
+	}
+
+	return c.validateAuth()
 }
 
 func (c *ServerConfig) validateModeAndNetwork() error {
@@ -345,6 +375,22 @@ func (c *ServerConfig) validateTLS() error {
 	}
 
 	return nil
+}
+
+func (c *ServerConfig) validateAuth() error {
+	p := strings.ToLower(strings.TrimSpace(c.Auth.Provider))
+	if p == "" {
+		return nil
+	}
+	switch p {
+	case "sqlite", "pam":
+		return nil
+	default:
+		return fmt.Errorf(
+			"invalid auth provider %q: must be sqlite or pam",
+			c.Auth.Provider,
+		)
+	}
 }
 
 // Validate verifies domain invariants for ClientConfig.

@@ -16,10 +16,11 @@ import (
 
 func newRootCmd() *cobra.Command {
 	rootCmd := &cobra.Command{
-		Use:           "cruciblectl",
-		Aliases:       []string{"c", "cb"},
-		Short:         "Crucible Operator Command-Line Interface",
-		Long:          "cruciblectl is the administrative and automation client for Crucible.",
+		Use:     "cruciblectl",
+		Aliases: []string{"c", "cb"},
+		Short:   "Crucible Operator Command-Line Interface",
+		Long: "cruciblectl is the administrative and " +
+			"automation client for Crucible.",
 		SilenceErrors: true,
 		SilenceUsage:  true,
 		RunE: func(cmd *cobra.Command, _ []string) error {
@@ -31,10 +32,17 @@ func newRootCmd() *cobra.Command {
 	rootCmd.SetUsageFunc(ui.HandleUsage)
 
 	var configFile string
-	rootCmd.PersistentFlags().StringVarP(&configFile, "config", "c", "", "Path to configuration file")
+	rootCmd.PersistentFlags().StringVarP(
+		&configFile,
+		"config",
+		"c",
+		"",
+		"Path to configuration file",
+	)
 
 	rootCmd.AddCommand(versionCmd())
 	rootCmd.AddCommand(configCmd())
+	rootCmd.AddCommand(authCmd())
 
 	return rootCmd
 }

@@ -270,7 +270,22 @@ func (s *CommandService) renderServerTemplate(prod bool) string {
 	sb.WriteString("  key_file: \"\"\n")
 	sb.WriteString("  acme_enabled: false\n")
 	sb.WriteString("  acme_domain: \"\"\n")
-	sb.WriteString("  acme_email: \"\"\n")
+	sb.WriteString("  acme_email: \"\"\n\n")
+
+	sb.WriteString("# Authentication and RBAC mapping\n")
+	sb.WriteString("auth:\n")
+	sb.WriteString("  provider: \"sqlite\" # sqlite | pam\n")
+	sb.WriteString("  require_2fa: true # enforce 2FA enrollment on login\n")
+	sb.WriteString("  admin_groups:\n")
+	sb.WriteString("    - \"root\"\n")
+	sb.WriteString("    - \"wheel\"\n")
+	sb.WriteString("    - \"sudo\"\n")
+	sb.WriteString("    - \"adm\"\n")
+	sb.WriteString("    - \"crucible-admin\"\n")
+	sb.WriteString("  operator_groups:\n")
+	sb.WriteString("    - \"operator\"\n")
+	sb.WriteString("    - \"crucible-operator\"\n")
+	sb.WriteString("  restrict_to_groups: true\n")
 
 	return sb.String()
 }

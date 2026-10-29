@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+	"gotcode.org/crucible/internal/auth"
 	"gotcode.org/crucible/internal/config"
 	"gotcode.org/crucible/internal/server"
 	"gotcode.org/crucible/internal/storage"
@@ -24,11 +25,13 @@ import (
 
 func startCmd() *cobra.Command {
 	var (
-		configPath string
-		dbPath     string
-		httpPort   int
-		httpBind   string
-		socketPath string
+		configPath   string
+		dbPath       string
+		httpPort     int
+		httpBind     string
+		socketPath   string
+		require2FA   bool
+		noRequire2FA bool
 	)
 
 	cmd := &cobra.Command{
@@ -39,6 +42,13 @@ func startCmd() *cobra.Command {
 			"socket listeners for operator control and web shell access.",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			ctx := cmd.Context()
+			var req2FAPtr *bool
+			if cmd.Flags().Changed("no-require-2fa") && noRequire2FA {
+				val := false
+				req2FAPtr = &val
+			} else if cmd.Flags().Changed("require-2fa") {
+				req2FAPtr = &require2FA
+			}
 			cfg, err := loadDaemonConfig(
 				ctx,
 				configPath,
@@ -46,6 +56,7 @@ func startCmd() *cobra.Command {
 				httpBind,
 				socketPath,
 				httpPort,
+				req2FAPtr,
 			)
 			if err != nil {
 				return err
@@ -65,15 +76,58 @@ func startCmd() *cobra.Command {
 				return fmt.Errorf("running initial schema migration: %w", mErr)
 			}
 
+			authStore := auth.NewSQLiteStore(engine.DB())
+			masterKey, kErr := auth.LoadOrCreateMasterKey(
+				cfg.Secrets.KeyPath,
+			)
+			if kErr != nil {
+				return fmt.Errorf("loading master encryption key: %w", kErr)
+			}
+			crypter, cErr := auth.NewAESGCMCrypter(masterKey)
+			if cErr != nil {
+				return fmt.Errorf("initializing secret crypter: %w", cErr)
+			}
+
+			var authenticator auth.Authenticator
+			restrictGroups := false
+			if strings.EqualFold(cfg.Auth.Provider, "pam") {
+				authenticator = auth.NewPAMAuthenticator(auth.PAMConfig{
+					HelperPath:     auth.DefaultUnixChkpwdPath,
+					AdminGroups:    cfg.Auth.AdminGroups,
+					OperatorGroups: cfg.Auth.OperatorGroups,
+				})
+				restrictGroups = cfg.Auth.RestrictToGroups
+			} else {
+				authenticator = auth.NewSQLiteAuthenticator(authStore)
+			}
+
+			authCmd := auth.NewCommandService(
+				authenticator,
+				authStore,
+				authStore,
+				authStore,
+				authStore,
+				authStore,
+				crypter,
+				restrictGroups,
+			)
+			authQuery := auth.NewQueryService(
+				authStore,
+				authStore,
+				authStore,
+			)
+
 			appVersion := resolveAppVersion(ctx)
 			srv, sErr := server.NewServer(server.Config{
-				HTTPBind:   cfg.Server.HTTPBind,
-				HTTPPort:   cfg.Server.HTTPPort,
-				SocketPath: cfg.Server.SocketPath,
-				SocketMode: 0660,
-				DaemonMode: cfg.Mode,
-				Version:    appVersion,
-			}, engine, nil)
+				HTTPBind:     cfg.Server.HTTPBind,
+				HTTPPort:     cfg.Server.HTTPPort,
+				SocketPath:   cfg.Server.SocketPath,
+				SocketMode:   0660,
+				DaemonMode:   cfg.Mode,
+				Version:      appVersion,
+				AuthProvider: cfg.Auth.Provider,
+				Require2FA:   cfg.Auth.Require2FA,
+			}, engine, nil, authCmd, authQuery)
 			if sErr != nil {
 				return fmt.Errorf("initializing server: %w", sErr)
 			}
@@ -117,6 +171,18 @@ func startCmd() *cobra.Command {
 		"",
 		"Override UNIX domain socket path",
 	)
+	cmd.Flags().BoolVar(
+		&require2FA,
+		"require-2fa",
+		true,
+		"Enforce mandatory 2FA enrollment on login",
+	)
+	cmd.Flags().BoolVar(
+		&noRequire2FA,
+		"no-require-2fa",
+		false,
+		"Disable mandatory 2FA enrollment on login",
+	)
 
 	return cmd
 }
@@ -125,6 +191,7 @@ func loadDaemonConfig(
 	ctx context.Context,
 	configPath, dbPath, httpBind, socketPath string,
 	httpPort int,
+	require2FA *bool,
 ) (*config.ServerConfig, error) {
 	svc := config.DefaultQueryService()
 	var flagOverrides config.ServerFlagOverrides
@@ -139,6 +206,9 @@ func loadDaemonConfig(
 	}
 	if socketPath != "" {
 		flagOverrides.SocketPath = &socketPath
+	}
+	if require2FA != nil {
+		flagOverrides.Require2FA = require2FA
 	}
 
 	cfg, err := svc.GetServerConfig(ctx, config.GetServerConfigQuery{
@@ -232,6 +302,14 @@ func printServerBanner(
 		{
 			"Database",
 			fmt.Sprintf("%s (sqlite)", cfg.Storage.DatabasePath),
+		},
+		{
+			"Auth Provider",
+			strings.ToUpper(cfg.Auth.Provider),
+		},
+		{
+			"Require 2FA",
+			fmt.Sprintf("%t", cfg.Auth.Require2FA),
 		},
 	}
 

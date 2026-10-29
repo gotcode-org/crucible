@@ -36,6 +36,7 @@ func newRootCmd() *cobra.Command {
 	rootCmd.AddCommand(configCmd())
 	rootCmd.AddCommand(systemdCmd())
 	rootCmd.AddCommand(dbCmd())
+	rootCmd.AddCommand(userCmd())
 	rootCmd.AddCommand(startCmd())
 
 	return rootCmd

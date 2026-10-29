@@ -1,0 +1,229 @@
+{{ define "content" }}
+<div class="space-y-6">
+
+  {{ if .Enforced }}
+  <div class="rounded-xl bg-amber-500/10 border border-amber-500/30 p-4 text-xs font-mono text-amber-300 flex items-start gap-3 shadow-lg">
+    <span class="text-base shrink-0">🛡️</span>
+    <div>
+      <div class="font-bold uppercase tracking-wider text-amber-200">Two-Factor Authentication Required</div>
+      <p class="mt-1 text-zinc-300 font-sans text-xs leading-relaxed">
+        System security policy mandates two-factor authentication for all operator accounts. Please scan the QR code below or enter the secret into your authenticator app (such as Google Authenticator, 1Password, or YubiKey), then verify a 6-digit code to complete enrollment and unlock the command center.
+      </p>
+    </div>
+  </div>
+  {{ end }}
+
+  <!-- Header Banner -->
+  <div class="rounded-xl bg-zinc-900/60 border border-zinc-800/80 p-6 flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+    <div>
+      <div class="flex items-center gap-2 text-xs font-mono text-emerald-400">
+        <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+        <span>RFC 6238 TOTP SECURITY MATRIX</span>
+      </div>
+      <h1 class="text-2xl font-bold tracking-tight text-white mt-1">Multi-Device Two-Factor Authentication</h1>
+      <p class="text-xs text-zinc-400 mt-1">
+        Manage hardware tokens, authenticator apps, and single-use onboarding invitations for operator {{ .OperatorUser }}.
+      </p>
+    </div>
+    <div class="flex items-center gap-3">
+      <span class="px-3 py-1.5 rounded-lg text-xs font-mono bg-zinc-800 text-zinc-300 border border-zinc-700">
+        Active Tokens: {{ len .Devices }}
+      </span>
+    </div>
+  </div>
+
+  {{ if .Message }}
+  <div class="rounded-lg bg-emerald-500/10 border border-emerald-500/30 px-4 py-3 text-xs text-emerald-400 font-mono">
+    {{ .Message }}
+  </div>
+  {{ end }}
+
+  {{ if .Error }}
+  <div class="rounded-lg bg-rose-500/10 border border-rose-500/30 px-4 py-3 text-xs text-rose-400 font-mono">
+    {{ .Error }}
+  </div>
+  {{ end }}
+
+  <!-- Active Devices Grid / Table -->
+  <div class="rounded-xl bg-zinc-900/40 border border-zinc-800/80 overflow-hidden">
+    <div class="px-6 py-4 border-b border-zinc-800/80 flex items-center justify-between">
+      <h2 class="text-sm font-semibold text-white">Enrolled Authenticator Devices</h2>
+      <span class="text-xs font-mono text-zinc-500">AES-256-GCM ENCRYPTED AT REST</span>
+    </div>
+
+    {{ if .Devices }}
+    <div class="overflow-x-auto">
+      <table class="w-full text-left text-xs font-mono">
+        <thead class="bg-zinc-950/60 text-zinc-400 uppercase text-[10px] tracking-wider border-b border-zinc-800/80">
+          <tr>
+            <th class="px-6 py-3">Device ID</th>
+            <th class="px-6 py-3">Device Name</th>
+            <th class="px-6 py-3">Enrolled At</th>
+            <th class="px-6 py-3">Last Used</th>
+            <th class="px-6 py-3 text-right">Actions</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-zinc-800/50">
+          {{ range .Devices }}
+          <tr class="hover:bg-zinc-800/20 transition-colors">
+            <td class="px-6 py-3 text-zinc-300 font-semibold">{{ .ID }}</td>
+            <td class="px-6 py-3 text-zinc-200">
+              <span class="inline-flex items-center gap-1.5">
+                <span class="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
+                {{ .Name }}
+              </span>
+            </td>
+            <td class="px-6 py-3 text-zinc-400">{{ formatTime .CreatedAt }}</td>
+            <td class="px-6 py-3 text-zinc-400">
+              {{ if .LastUsedAt }}{{ formatTime .LastUsedAt }}{{ else }}Never{{ end }}
+            </td>
+            <td class="px-6 py-3 text-right">
+              <form action="/settings/2fa/revoke" method="POST" class="inline" onsubmit="return confirm('Revoke this 2FA device?');">
+                <input type="hidden" name="device_id" value="{{ .ID }}" />
+                <button type="submit" class="text-rose-400 hover:text-rose-300 hover:underline cursor-pointer">
+                  Revoke
+                </button>
+              </form>
+            </td>
+          </tr>
+          {{ end }}
+        </tbody>
+      </table>
+    </div>
+    {{ else }}
+    <div class="p-8 text-center space-y-2">
+      <div class="text-zinc-400 text-sm">No 2FA devices enrolled yet.</div>
+      <div class="text-xs text-zinc-500 font-mono">
+        Enroll an authenticator app below to require two-factor verification on login.
+      </div>
+    </div>
+    {{ end }}
+  </div>
+
+  <!-- Two Column Layout: Enroll Device + Issue Invite -->
+  <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+
+    <!-- Card: Enroll New Device -->
+    <div class="rounded-xl bg-zinc-900/40 border border-zinc-800/80 p-6 space-y-4">
+      <div class="border-b border-zinc-800/80 pb-3">
+        <h2 class="text-sm font-semibold text-white">Enroll New Authenticator</h2>
+        <p class="text-xs text-zinc-400 mt-0.5">
+          Scan the QR code with Google Authenticator, 1Password, or Bitwarden.
+        </p>
+      </div>
+
+      {{ if .EnrollPrep }}
+      <div class="flex flex-col sm:flex-row items-center gap-6 pt-2">
+        <div class="p-2 bg-white rounded-lg shadow-lg shrink-0">
+          <div class="w-48 h-48 flex items-center justify-center">
+            {{ .EnrollPrep.QRCodeSVG | safeHTML }}
+          </div>
+        </div>
+
+        <div class="space-y-3 w-full">
+          <div>
+            <label class="block text-[10px] font-mono uppercase text-zinc-500">Secret Key (Manual Entry)</label>
+            <div class="text-xs font-mono text-emerald-400 bg-zinc-950 p-2 rounded border border-zinc-800 break-all select-all">
+              {{ .EnrollPrep.SecretBase32 }}
+            </div>
+          </div>
+
+          <form action="/settings/2fa/enroll" method="POST" class="space-y-3">
+            <input type="hidden" name="secret_base32" value="{{ .EnrollPrep.SecretBase32 }}" />
+
+            <div>
+              <label for="device_name" class="block text-[10px] font-mono uppercase text-zinc-400">Device Name</label>
+              <input
+                type="text"
+                id="device_name"
+                name="device_name"
+                required
+                placeholder="e.g. Work Laptop, YubiKey"
+                class="w-full px-3 py-2 text-xs font-mono bg-zinc-950 border border-zinc-800 rounded text-zinc-200 outline-none focus:border-emerald-500"
+              />
+            </div>
+
+            <div>
+              <label for="enroll_passcode" class="block text-[10px] font-mono uppercase text-zinc-400">Confirmation Passcode</label>
+              <input
+                type="text"
+                id="enroll_passcode"
+                name="passcode"
+                required
+                maxlength="6"
+                placeholder="6-digit code"
+                class="w-full px-3 py-2 text-xs font-mono bg-zinc-950 border border-zinc-800 rounded text-emerald-400 outline-none focus:border-emerald-500"
+              />
+            </div>
+
+            <button
+              type="submit"
+              class="w-full py-2 px-4 rounded text-xs font-semibold text-zinc-950 bg-emerald-400 hover:bg-emerald-300 transition-colors cursor-pointer"
+            >
+              Verify & Register Device
+            </button>
+          </form>
+        </div>
+      </div>
+      {{ end }}
+    </div>
+
+    <!-- Card: Issue Shared Account Invite -->
+    <div class="rounded-xl bg-zinc-900/40 border border-zinc-800/80 p-6 space-y-4">
+      <div class="border-b border-zinc-800/80 pb-3">
+        <h2 class="text-sm font-semibold text-white">Generate Onboarding Invite URL</h2>
+        <p class="text-xs text-zinc-400 mt-0.5">
+          Issue a single-use 24-hour invitation for secondary operators or shared accounts.
+        </p>
+      </div>
+
+      {{ if .InviteResult }}
+      <div class="p-4 rounded-lg bg-emerald-500/10 border border-emerald-500/30 space-y-2">
+        <div class="text-xs font-mono text-emerald-400 font-semibold">Invite Token Generated:</div>
+        <div class="text-xs font-mono text-zinc-200 break-all select-all bg-zinc-950 p-2 rounded border border-zinc-800">
+          {{ .InviteResult.Token }}
+        </div>
+        <div class="text-[11px] font-mono text-zinc-400">
+          Expires at {{ formatTime .InviteResult.ExpiresAt }} (single-use).
+        </div>
+      </div>
+      {{ end }}
+
+      <form action="/settings/2fa/invite" method="POST" class="space-y-4 pt-2">
+        <div>
+          <label for="invite_username" class="block text-[10px] font-mono uppercase text-zinc-400">Target Username</label>
+          <input
+            type="text"
+            id="invite_username"
+            name="username"
+            value="{{ .OperatorUser }}"
+            required
+            class="w-full px-3 py-2 text-xs font-mono bg-zinc-950 border border-zinc-800 rounded text-zinc-200 outline-none focus:border-emerald-500"
+          />
+        </div>
+
+        <div>
+          <label for="invite_label" class="block text-[10px] font-mono uppercase text-zinc-400">Operator / Workstation Label</label>
+          <input
+            type="text"
+            id="invite_label"
+            name="label"
+            required
+            placeholder="e.g. Alice Workstation, Primary iPhone"
+            class="w-full px-3 py-2 text-xs font-mono bg-zinc-950 border border-zinc-800 rounded text-zinc-200 outline-none focus:border-emerald-500"
+          />
+        </div>
+
+        <button
+          type="submit"
+          class="w-full py-2 px-4 rounded text-xs font-semibold text-zinc-950 bg-cyan-400 hover:bg-cyan-300 transition-colors cursor-pointer"
+        >
+          Generate Single-Use Invite Token
+        </button>
+      </form>
+    </div>
+
+  </div>
+
+</div>
+{{ end }}

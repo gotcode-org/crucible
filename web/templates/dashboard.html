@@ -1,4 +1,20 @@
 {{ define "content" }}
+{{ if .Message }}
+<div class="rounded-xl bg-emerald-500/10 border border-emerald-500/30 p-4 text-xs font-mono text-emerald-400 mb-6 flex items-center justify-between">
+  <div class="flex items-center gap-2">
+    <span>✔</span>
+    <span>{{ .Message }}</span>
+  </div>
+</div>
+{{ end }}
+{{ if .Error }}
+<div class="rounded-xl bg-rose-500/10 border border-rose-500/30 p-4 text-xs font-mono text-rose-400 mb-6 flex items-center justify-between">
+  <div class="flex items-center gap-2">
+    <span>✘</span>
+    <span>{{ .Error }}</span>
+  </div>
+</div>
+{{ end }}
 <!-- 4-Column Telemetry Strip -->
 <section class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
   <!-- Card 1: Engine Status -->

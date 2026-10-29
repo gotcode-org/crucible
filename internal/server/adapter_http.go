@@ -12,14 +12,20 @@ import (
 	"io/fs"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
+	"gotcode.org/crucible/internal/auth"
 	"gotcode.org/crucible/internal/storage"
 	"gotcode.org/crucible/web"
 )
+
+// SessionCookieName defines the standard name of the session cookie.
+const SessionCookieName = "crucible_session"
 
 // HTTPServer implements the Server interface hosting the embedded web shell,
 // metrics, and JSON health endpoints over dual TCP and UNIX domain sockets.
@@ -27,6 +33,8 @@ type HTTPServer struct {
 	cfg          Config
 	engine       storage.Engine
 	querySvc     storage.QueryHandler
+	authCmd      auth.CommandHandler
+	authQuery    auth.QueryHandler
 	mux          *http.ServeMux
 	tcpListener  net.Listener
 	unixListener net.Listener
@@ -47,6 +55,8 @@ func NewServer(
 	cfg Config,
 	engine storage.Engine,
 	querySvc storage.QueryHandler,
+	authCmd auth.CommandHandler,
+	authQuery auth.QueryHandler,
 ) (*HTTPServer, error) {
 	if cfg.HTTPBind == "" {
 		cfg.HTTPBind = "127.0.0.1"
@@ -63,10 +73,12 @@ func NewServer(
 	}
 
 	s := &HTTPServer{
-		cfg:      cfg,
-		engine:   engine,
-		querySvc: querySvc,
-		mux:      http.NewServeMux(),
+		cfg:       cfg,
+		engine:    engine,
+		querySvc:  querySvc,
+		authCmd:   authCmd,
+		authQuery: authQuery,
+		mux:       http.NewServeMux(),
 	}
 
 	if err := s.setupRoutes(); err != nil {
@@ -87,6 +99,21 @@ func (s *HTTPServer) setupRoutes() error {
 		http.StripPrefix("/static/", http.FileServer(http.FS(staticFS))),
 	)
 	s.mux.HandleFunc("/healthz", s.handleHealthz)
+	s.mux.HandleFunc("/login", s.handleLogin)
+	s.mux.HandleFunc("/auth/2fa", s.handle2FA)
+	s.mux.HandleFunc("/logout", s.handleLogout)
+	s.mux.HandleFunc("/settings/2fa", s.handleSettings2FA)
+	s.mux.HandleFunc("/settings/2fa/enroll", s.handleSettings2FAEnroll)
+	s.mux.HandleFunc("/settings/2fa/revoke", s.handleSettings2FARevoke)
+	s.mux.HandleFunc("/settings/2fa/invite", s.handleSettings2FAInvite)
+
+	// JSON API endpoints
+	s.mux.HandleFunc("/api/v1/auth/login", s.handleAPILogin)
+	s.mux.HandleFunc("/api/v1/auth/verify-2fa", s.handleAPIVerify2FA)
+	s.mux.HandleFunc("/api/v1/auth/devices", s.handleAPIDevices)
+	s.mux.HandleFunc("/api/v1/auth/invite", s.handleAPIInvite)
+	s.mux.HandleFunc("/api/v1/auth/session", s.handleAPISession)
+
 	s.mux.HandleFunc("/", s.handleDashboard)
 
 	return nil
@@ -425,11 +452,42 @@ func (s *HTTPServer) handleDashboard(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	var session *auth.Session
+	if s.authQuery != nil {
+		sess, err := s.extractSession(r)
+		if err != nil || sess == nil {
+			http.Redirect(w, r, "/login", http.StatusFound)
+			return
+		}
+		if s.cfg.Require2FA {
+			devices, dErr := s.authQuery.ListDevices(
+				r.Context(),
+				auth.ListDevicesQuery{Username: sess.Username},
+			)
+			if dErr == nil && len(devices) == 0 {
+				http.Redirect(
+					w,
+					r,
+					"/settings/2fa?enforce=true",
+					http.StatusFound,
+				)
+				return
+			}
+		}
+		session = sess
+	}
+
 	st := s.queryStorageStatus(r.Context())
 	migrations := s.queryAppliedMigrations(r.Context())
 
 	user := os.Getenv("USER")
-	if user == "" {
+	authState := "LOCAL_SESSION"
+	opRole := "operator"
+	if session != nil {
+		user = session.Username
+		authState = "AUTHENTICATED"
+		opRole = string(session.Role)
+	} else if user == "" {
 		user = "operator@localhost"
 	}
 
@@ -445,17 +503,723 @@ func (s *HTTPServer) handleDashboard(w http.ResponseWriter, r *http.Request) {
 		SocketPath:   s.cfg.SocketPath,
 		DaemonMode:   s.cfg.DaemonMode,
 		OperatorUser: user,
-		AuthState:    "LOCAL_SESSION",
+		OperatorRole: opRole,
+		AuthProvider: s.cfg.AuthProvider,
+		AuthState:    authState,
 		Uptime:       uptimeDuration.String(),
 		StartedAt:    s.startedAt,
 		Storage:      st,
 		Migrations:   migrations,
+		Message:      r.URL.Query().Get("msg"),
+		Error:        r.URL.Query().Get("error"),
 	}
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := web.RenderTemplate(w, "dashboard.html", pageCtx); err != nil {
 		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 	}
+}
+
+func (s *HTTPServer) extractSession(r *http.Request) (*auth.Session, error) {
+	if s.authQuery == nil {
+		return nil, errors.New("auth query unconfigured")
+	}
+
+	var token string
+	if cookie, err := r.Cookie(SessionCookieName); err == nil &&
+		cookie.Value != "" {
+		token = cookie.Value
+	} else if authHdr := r.Header.Get("Authorization"); strings.HasPrefix(
+		authHdr,
+		"Bearer ",
+	) {
+		token = strings.TrimSpace(strings.TrimPrefix(authHdr, "Bearer "))
+	}
+
+	if token == "" {
+		return nil, errors.New("missing session token")
+	}
+
+	return s.authQuery.ValidateSession(r.Context(), auth.ValidateSessionQuery{
+		SessionID: token,
+	})
+}
+
+func (s *HTTPServer) handleLogin(w http.ResponseWriter, r *http.Request) {
+	if s.authCmd == nil {
+		http.Redirect(w, r, "/", http.StatusFound)
+		return
+	}
+
+	authProv := s.cfg.AuthProvider
+	if authProv == "" {
+		authProv = "sqlite"
+	}
+
+	if r.Method == http.MethodGet {
+		s.handleLoginGet(w, r, authProv)
+		return
+	}
+	if r.Method == http.MethodPost {
+		s.handleLoginPost(w, r, authProv)
+		return
+	}
+
+	http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+}
+
+func (s *HTTPServer) handleLoginGet(
+	w http.ResponseWriter,
+	r *http.Request,
+	authProv string,
+) {
+	if s.authQuery != nil {
+		if _, err := s.extractSession(r); err == nil {
+			http.Redirect(w, r, "/", http.StatusFound)
+			return
+		}
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if err := web.RenderStandalone(w, "login.html", LoginPageContext{
+		Version:      s.cfg.Version,
+		AuthProvider: authProv,
+	}); err != nil {
+		http.Error(w, "Render Error", http.StatusInternalServerError)
+	}
+}
+
+func (s *HTTPServer) handleLoginPost(
+	w http.ResponseWriter,
+	r *http.Request,
+	authProv string,
+) {
+	username := strings.TrimSpace(r.FormValue("username"))
+	password := r.FormValue("password")
+
+	loginRes, err := s.authCmd.Login(r.Context(), auth.LoginCommand{
+		Username: username,
+		Password: password,
+	})
+	if err != nil {
+		s.renderLoginError(w, authProv, username, err)
+		return
+	}
+
+	if loginRes.Requires2FA {
+		redir := fmt.Sprintf(
+			"/auth/2fa?token=%s",
+			url.QueryEscape(loginRes.ChallengeToken),
+		)
+		http.Redirect(w, r, redir, http.StatusFound)
+		return
+	}
+
+	http.SetCookie(w, &http.Cookie{
+		Name:     SessionCookieName,
+		Value:    loginRes.Session.ID,
+		Path:     "/",
+		Expires:  loginRes.Session.ExpiresAt,
+		HttpOnly: true,
+		SameSite: http.SameSiteStrictMode,
+	})
+
+	if s.cfg.Require2FA && s.authQuery != nil {
+		devices, dErr := s.authQuery.ListDevices(
+			r.Context(),
+			auth.ListDevicesQuery{Username: loginRes.Session.Username},
+		)
+		if dErr == nil && len(devices) == 0 {
+			http.Redirect(
+				w,
+				r,
+				"/settings/2fa?enforce=true",
+				http.StatusFound,
+			)
+			return
+		}
+	}
+
+	http.Redirect(w, r, "/", http.StatusFound)
+}
+
+func (s *HTTPServer) renderLoginError(
+	w http.ResponseWriter,
+	authProv string,
+	username string,
+	err error,
+) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	status := http.StatusUnauthorized
+	errMsg := "Invalid operator username or password"
+	if errors.Is(err, auth.ErrAccessDenied) {
+		status = http.StatusForbidden
+		errMsg = "Access denied: user is not in an authorized group"
+	}
+	w.WriteHeader(status)
+	if rErr := web.RenderStandalone(w, "login.html", LoginPageContext{
+		Version:      s.cfg.Version,
+		AuthProvider: authProv,
+		Username:     username,
+		Error:        errMsg,
+	}); rErr != nil {
+		http.Error(w, "Render Error", http.StatusInternalServerError)
+	}
+}
+
+func (s *HTTPServer) handle2FA(w http.ResponseWriter, r *http.Request) {
+	if s.authCmd == nil {
+		http.Redirect(w, r, "/", http.StatusFound)
+		return
+	}
+
+	if r.Method == http.MethodGet {
+		token := r.URL.Query().Get("token")
+		if token == "" {
+			http.Redirect(w, r, "/login", http.StatusFound)
+			return
+		}
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		if err := web.RenderStandalone(w, "2fa.html", TwoFactorPageContext{
+			ChallengeToken: token,
+		}); err != nil {
+			http.Error(w, "Render Error", http.StatusInternalServerError)
+		}
+		return
+	}
+
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	token := strings.TrimSpace(r.FormValue("challenge_token"))
+	passcode := strings.TrimSpace(r.FormValue("passcode"))
+
+	res, err := s.authCmd.Verify2FA(r.Context(), auth.Verify2FACommand{
+		ChallengeToken: token,
+		Passcode:       passcode,
+	})
+	if err != nil {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.WriteHeader(http.StatusUnauthorized)
+		if rErr := web.RenderStandalone(w, "2fa.html", TwoFactorPageContext{
+			ChallengeToken: token,
+			Error:          "Invalid 2FA passcode or expired challenge",
+		}); rErr != nil {
+			http.Error(w, "Render Error", http.StatusInternalServerError)
+		}
+		return
+	}
+
+	http.SetCookie(w, &http.Cookie{
+		Name:     SessionCookieName,
+		Value:    res.Session.ID,
+		Path:     "/",
+		Expires:  res.Session.ExpiresAt,
+		HttpOnly: true,
+		SameSite: http.SameSiteStrictMode,
+	})
+	http.Redirect(w, r, "/", http.StatusFound)
+}
+
+func (s *HTTPServer) handleLogout(w http.ResponseWriter, r *http.Request) {
+	if cookie, err := r.Cookie(SessionCookieName); err == nil &&
+		s.authCmd != nil {
+		if lErr := s.authCmd.Logout(r.Context(), auth.LogoutCommand{
+			SessionID: cookie.Value,
+		}); lErr != nil {
+			_ = lErr
+		}
+	}
+
+	http.SetCookie(w, &http.Cookie{
+		Name:     SessionCookieName,
+		Value:    "",
+		Path:     "/",
+		Expires:  time.Unix(0, 0),
+		MaxAge:   -1,
+		HttpOnly: true,
+		SameSite: http.SameSiteStrictMode,
+	})
+	http.Redirect(w, r, "/login", http.StatusFound)
+}
+
+func (s *HTTPServer) handleSettings2FA(
+	w http.ResponseWriter,
+	r *http.Request,
+) {
+	sess, err := s.extractSession(r)
+	if err != nil || sess == nil {
+		http.Redirect(w, r, "/login", http.StatusFound)
+		return
+	}
+
+	var devices []auth.TOTPDevice
+	if s.authQuery != nil {
+		if devs, dErr := s.authQuery.ListDevices(
+			r.Context(),
+			auth.ListDevicesQuery{Username: sess.Username},
+		); dErr == nil {
+			devices = devs
+		}
+	}
+
+	var prep *auth.PrepareEnrollmentResult
+	if s.authCmd != nil {
+		if p, pErr := s.authCmd.PrepareEnrollment(
+			r.Context(),
+			sess.Username,
+		); pErr == nil {
+			prep = p
+		}
+	}
+
+	st := s.queryStorageStatus(r.Context())
+	uptimeDuration := time.Since(s.startedAt).Truncate(time.Second)
+
+	enforced := len(devices) == 0 &&
+		(s.cfg.Require2FA || r.URL.Query().Get("enforce") == "true")
+
+	pageCtx := Settings2FAPageContext{
+		PageContext: PageContext{
+			Title:        "Security & 2FA",
+			Version:      s.cfg.Version,
+			ActiveNav:    "settings_2fa",
+			Breadcrumb:   "SECURITY / 2FA",
+			HTTPBind:     s.cfg.HTTPBind,
+			HTTPPort:     s.effectivePort(),
+			SocketPath:   s.cfg.SocketPath,
+			DaemonMode:   s.cfg.DaemonMode,
+			OperatorUser: sess.Username,
+			OperatorRole: string(sess.Role),
+			AuthProvider: s.cfg.AuthProvider,
+			AuthState:    "AUTHENTICATED",
+			Uptime:       uptimeDuration.String(),
+			StartedAt:    s.startedAt,
+			Storage:      st,
+			Message:      r.URL.Query().Get("msg"),
+			Error:        r.URL.Query().Get("error"),
+		},
+		Devices:    devices,
+		EnrollPrep: prep,
+		Enforced:   enforced,
+		Message:    r.URL.Query().Get("msg"),
+		Error:      r.URL.Query().Get("error"),
+	}
+
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if enforced {
+		if err := web.RenderStandalone(
+			w,
+			"enforce_2fa.html",
+			pageCtx,
+		); err != nil {
+			http.Error(w, "Render Error", http.StatusInternalServerError)
+		}
+		return
+	}
+
+	if err := web.RenderTemplate(
+		w,
+		"settings_2fa.html",
+		pageCtx,
+	); err != nil {
+		http.Error(w, "Render Error", http.StatusInternalServerError)
+	}
+}
+
+func (s *HTTPServer) handleSettings2FAEnroll(
+	w http.ResponseWriter,
+	r *http.Request,
+) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	sess, err := s.extractSession(r)
+	if err != nil || sess == nil {
+		http.Redirect(w, r, "/login", http.StatusFound)
+		return
+	}
+
+	name := strings.TrimSpace(r.FormValue("device_name"))
+	secret := strings.TrimSpace(r.FormValue("secret_base32"))
+	passcode := strings.TrimSpace(r.FormValue("passcode"))
+
+	_, err = s.authCmd.EnrollDevice(r.Context(), auth.EnrollDeviceCommand{
+		Username:     sess.Username,
+		DeviceName:   name,
+		SecretBase32: secret,
+		Passcode:     passcode,
+	})
+	if err != nil {
+		redir := "/settings/2fa?error=" +
+			url.QueryEscape("Enrollment failed: "+err.Error())
+		if s.cfg.Require2FA {
+			redir += "&enforce=true"
+		}
+		http.Redirect(w, r, redir, http.StatusFound)
+		return
+	}
+
+	redir := "/settings/2fa?msg=" +
+		url.QueryEscape("Device registered successfully")
+	if s.cfg.Require2FA {
+		redir = "/?msg=" + url.QueryEscape(
+			"Two-factor authentication configured successfully. Welcome!",
+		)
+	}
+	http.Redirect(w, r, redir, http.StatusFound)
+}
+
+func (s *HTTPServer) handleSettings2FARevoke(
+	w http.ResponseWriter,
+	r *http.Request,
+) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	sess, err := s.extractSession(r)
+	if err != nil || sess == nil {
+		http.Redirect(w, r, "/login", http.StatusFound)
+		return
+	}
+
+	deviceID := strings.TrimSpace(r.FormValue("device_id"))
+	if s.authCmd != nil {
+		if rErr := s.authCmd.RevokeDevice(r.Context(), auth.RevokeDeviceCommand{
+			DeviceID: deviceID,
+			Username: sess.Username,
+		}); rErr != nil {
+			_ = rErr
+		}
+	}
+
+	http.Redirect(w, r, "/settings/2fa", http.StatusFound)
+}
+
+func (s *HTTPServer) handleSettings2FAInvite(
+	w http.ResponseWriter,
+	r *http.Request,
+) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	sess, err := s.extractSession(r)
+	if err != nil || sess == nil {
+		http.Redirect(w, r, "/login", http.StatusFound)
+		return
+	}
+
+	targetUser := strings.TrimSpace(r.FormValue("username"))
+	label := strings.TrimSpace(r.FormValue("label"))
+	if targetUser == "" {
+		targetUser = sess.Username
+	}
+
+	inv, err := s.authCmd.CreateInvite(r.Context(), auth.CreateInviteCommand{
+		Username:  targetUser,
+		Label:     label,
+		CreatedBy: sess.Username,
+	})
+	if err != nil {
+		redir := "/settings/2fa?error=" +
+			url.QueryEscape("Invite generation failed: "+err.Error())
+		http.Redirect(w, r, redir, http.StatusFound)
+		return
+	}
+
+	var devices []auth.TOTPDevice
+	if s.authQuery != nil {
+		if devs, dErr := s.authQuery.ListDevices(
+			r.Context(),
+			auth.ListDevicesQuery{Username: sess.Username},
+		); dErr == nil {
+			devices = devs
+		}
+	}
+
+	var prep *auth.PrepareEnrollmentResult
+	if s.authCmd != nil {
+		if p, pErr := s.authCmd.PrepareEnrollment(
+			r.Context(),
+			sess.Username,
+		); pErr == nil {
+			prep = p
+		}
+	}
+
+	st := s.queryStorageStatus(r.Context())
+	uptimeDuration := time.Since(s.startedAt).Truncate(time.Second)
+
+	pageCtx := Settings2FAPageContext{
+		PageContext: PageContext{
+			Title:        "Security & 2FA",
+			Version:      s.cfg.Version,
+			ActiveNav:    "settings_2fa",
+			Breadcrumb:   "SECURITY / 2FA",
+			HTTPBind:     s.cfg.HTTPBind,
+			HTTPPort:     s.effectivePort(),
+			SocketPath:   s.cfg.SocketPath,
+			DaemonMode:   s.cfg.DaemonMode,
+			OperatorUser: sess.Username,
+			AuthState:    "AUTHENTICATED",
+			Uptime:       uptimeDuration.String(),
+			StartedAt:    s.startedAt,
+			Storage:      st,
+		},
+		Devices:      devices,
+		EnrollPrep:   prep,
+		InviteResult: inv,
+	}
+
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if err := web.RenderTemplate(
+		w,
+		"settings_2fa.html",
+		pageCtx,
+	); err != nil {
+		http.Error(w, "Render Error", http.StatusInternalServerError)
+	}
+}
+
+func writeJSON(w http.ResponseWriter, status int, data any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	if err := json.NewEncoder(w).Encode(data); err != nil {
+		http.Error(w, "JSON Encoding Error", http.StatusInternalServerError)
+	}
+}
+
+func (s *HTTPServer) handleAPILogin(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.authCmd == nil {
+		http.Error(w, "Auth unconfigured", http.StatusNotImplemented)
+		return
+	}
+
+	var req struct {
+		Username string `json:"username"`
+		Password string `json:"password"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid JSON payload", http.StatusBadRequest)
+		return
+	}
+
+	res, err := s.authCmd.Login(r.Context(), auth.LoginCommand{
+		Username: req.Username,
+		Password: req.Password,
+	})
+	if err != nil {
+		status := http.StatusUnauthorized
+		errMsg := "invalid credentials"
+		if errors.Is(err, auth.ErrAccessDenied) {
+			status = http.StatusForbidden
+			errMsg = "access denied: user is not in an authorized group"
+		}
+		writeJSON(w, status, map[string]string{
+			"error": errMsg,
+		})
+		return
+	}
+
+	if res.Requires2FA {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"requires_2fa":    true,
+			"challenge_token": res.ChallengeToken,
+		})
+		return
+	}
+
+	if s.cfg.Require2FA && s.authQuery != nil {
+		devices, dErr := s.authQuery.ListDevices(
+			r.Context(),
+			auth.ListDevicesQuery{Username: req.Username},
+		)
+		if dErr == nil && len(devices) == 0 {
+			writeJSON(w, http.StatusPreconditionRequired, map[string]any{
+				"error": "two-factor authentication is required; " +
+					"please enroll via web console",
+				"enrollment_required": true,
+			})
+			return
+		}
+	}
+
+	http.SetCookie(w, &http.Cookie{
+		Name:     SessionCookieName,
+		Value:    res.Session.ID,
+		Path:     "/",
+		Expires:  res.Session.ExpiresAt,
+		HttpOnly: true,
+		SameSite: http.SameSiteStrictMode,
+	})
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"requires_2fa": false,
+		"session":      res.Session,
+		"user":         res.User,
+	})
+}
+
+func (s *HTTPServer) handleAPIVerify2FA(
+	w http.ResponseWriter,
+	r *http.Request,
+) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.authCmd == nil {
+		http.Error(w, "Auth unconfigured", http.StatusNotImplemented)
+		return
+	}
+
+	var req struct {
+		ChallengeToken string `json:"challenge_token"`
+		Passcode       string `json:"passcode"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid JSON payload", http.StatusBadRequest)
+		return
+	}
+
+	res, err := s.authCmd.Verify2FA(r.Context(), auth.Verify2FACommand{
+		ChallengeToken: req.ChallengeToken,
+		Passcode:       req.Passcode,
+	})
+	if err != nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{
+			"error": "invalid 2fa passcode or expired challenge",
+		})
+		return
+	}
+
+	http.SetCookie(w, &http.Cookie{
+		Name:     SessionCookieName,
+		Value:    res.Session.ID,
+		Path:     "/",
+		Expires:  res.Session.ExpiresAt,
+		HttpOnly: true,
+		SameSite: http.SameSiteStrictMode,
+	})
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"session":   res.Session,
+		"user":      res.User,
+		"device_id": res.DeviceID,
+	})
+}
+
+func (s *HTTPServer) handleAPIDevices(w http.ResponseWriter, r *http.Request) {
+	sess, err := s.extractSession(r)
+	if err != nil || sess == nil {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		devices, err := s.authQuery.ListDevices(r.Context(), auth.ListDevicesQuery{
+			Username: sess.Username,
+		})
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, http.StatusOK, devices)
+	case http.MethodPost:
+		var req struct {
+			DeviceName   string `json:"device_name"`
+			SecretBase32 string `json:"secret_base32"`
+			Passcode     string `json:"passcode"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "Invalid JSON payload", http.StatusBadRequest)
+			return
+		}
+		dev, err := s.authCmd.EnrollDevice(r.Context(), auth.EnrollDeviceCommand{
+			Username:     sess.Username,
+			DeviceName:   req.DeviceName,
+			SecretBase32: req.SecretBase32,
+			Passcode:     req.Passcode,
+		})
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		writeJSON(w, http.StatusOK, dev)
+	case http.MethodDelete:
+		deviceID := r.URL.Query().Get("id")
+		if deviceID == "" {
+			http.Error(w, "Missing device id", http.StatusBadRequest)
+			return
+		}
+		if err := s.authCmd.RevokeDevice(r.Context(), auth.RevokeDeviceCommand{
+			DeviceID: deviceID,
+			Username: sess.Username,
+		}); err != nil {
+			http.Error(w, err.Error(), http.StatusNotFound)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	default:
+		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+func (s *HTTPServer) handleAPIInvite(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	sess, err := s.extractSession(r)
+	if err != nil || sess == nil {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	var req struct {
+		Username string `json:"username"`
+		Label    string `json:"label"`
+	}
+	if decErr := json.NewDecoder(r.Body).Decode(&req); decErr != nil {
+		http.Error(w, "Invalid JSON payload", http.StatusBadRequest)
+		return
+	}
+	if req.Username == "" {
+		req.Username = sess.Username
+	}
+
+	inv, err := s.authCmd.CreateInvite(r.Context(), auth.CreateInviteCommand{
+		Username:  req.Username,
+		Label:     req.Label,
+		CreatedBy: sess.Username,
+	})
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, inv)
+}
+
+func (s *HTTPServer) handleAPISession(w http.ResponseWriter, r *http.Request) {
+	sess, err := s.extractSession(r)
+	if err != nil || sess == nil {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+	writeJSON(w, http.StatusOK, sess)
 }
 
 func (s *HTTPServer) queryStorageStatus(ctx context.Context) *storage.Status {

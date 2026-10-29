@@ -7,6 +7,8 @@ package main
 import (
 	"bytes"
 	"context"
+	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -52,6 +54,8 @@ func TestCrucibledStart_Help(t *testing.T) {
 		"--socket-path",
 		"--database-path",
 		"--config",
+		"--require-2fa",
+		"--no-require-2fa",
 	}
 
 	for _, substr := range expectedSubstrings {
@@ -67,6 +71,26 @@ func TestCrucibledStart_Lifecycle(t *testing.T) {
 	tmpDir := t.TempDir()
 	dbFile := filepath.Join(tmpDir, "start_test.db")
 	sockFile := filepath.Join(tmpDir, "start_test.sock")
+	keyFile := filepath.Join(tmpDir, "secrets.key")
+	cfgFile := filepath.Join(tmpDir, "start_test_cfg.yaml")
+
+	cfgContent := fmt.Sprintf(
+		"version: \"1.0\"\n"+
+			"mode: standalone\n"+
+			"server:\n"+
+			"  http_port: 0\n"+
+			"  socket_path: %s\n"+
+			"storage:\n"+
+			"  database_path: %s\n"+
+			"secrets:\n"+
+			"  key_path: %s\n",
+		sockFile,
+		dbFile,
+		keyFile,
+	)
+	if err := os.WriteFile(cfgFile, []byte(cfgContent), 0600); err != nil {
+		t.Fatalf("writing temp config: %v", err)
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -77,9 +101,7 @@ func TestCrucibledStart_Lifecycle(t *testing.T) {
 	cmd.SetErr(&buf)
 	cmd.SetArgs([]string{
 		"start",
-		"--database-path", dbFile,
-		"--socket-path", sockFile,
-		"--http-port", "0",
+		"--config", cfgFile,
 	})
 
 	errChan := make(chan error, 1)

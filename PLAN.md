@@ -517,6 +517,41 @@ transparency with infrastructure confidentiality:
 | **Worker Drain & Maintenance**         | ❌ Blocked (401)      | ❌ Blocked     | ✅ Drain Node   | ✅ Full Admin      |
 | **User & PAT Token Administration**    | ❌ Blocked (401)      | Own PATs Only | Own PATs Only  | ✅ Full Admin        |
 
+### Dual Authentication Strategy: Linux-PAM vs. Native SQLite Users
+
+Crucible implements a Hexagonal authentication subsystem (`internal/auth/`)
+supporting pluggable authenticator adapters via the `auth.provider`
+configuration setting:
+
+1. **Native SQLite Users (`auth.provider: "sqlite"`) [Production Rootless]**:
+   * **Rootless Operation**: The entire daemon runs under an unprivileged
+     service account (`User=crucible`). Zero root permissions are required.
+   * **Argon2id Password Hashes**: Passwords are cryptographically hashed and
+     verified using pure Go `golang.org/x/crypto/argon2` in PHC string format
+     (`$argon2id$v=19$m=65536,t=3,p=4$<salt>$<hash>`).
+   * **Persistence**: Stored in SQLite `users` table (`username`,
+     `password_hash`, `role`, `is_active`, `created_at`, `last_login`).
+   * **User Lifecycle Management**:
+     * CLI commands: `crucibled user add`, `crucibled user passwd`,
+       `crucibled user list`, and `crucibled user delete`.
+     * Web UI management console at `/settings/users`.
+     * First-boot onboarding setup wizard (`/setup`) when zero users exist.
+   * **Playbook Execution**: Subprocesses execute directly as `crucible`
+     without requiring kernel credential switching.
+
+2. **Linux-PAM Authentication (`auth.provider: "pam"`) [Host POSIX Mode]**:
+   * **POSIX Account Integration**: Authenticates host system accounts against
+     `/etc/shadow` via `/sbin/unix_chkpwd` (`CGO_ENABLED=0`).
+   * **Host Group RBAC**: Maps POSIX group membership to Crucible roles
+     (`admin_groups`, `operator_groups`, `restrict_to_groups`).
+   * **Root Daemon Requirement**: `/sbin/unix_chkpwd` strictly requires
+     `ruid == 0` (root) to verify multi-user credentials. When `provider`
+     is set to `pam`, `crucibled` must run as root (hardened via systemd).
+   * **Subprocess Privilege Dropping**: The execution engine
+     (`internal/engine/exec_local.go`) drops root privileges for all playbook
+     child processes to the configured `execution_user` (`crucible`) via
+     `SysProcAttr.Credential`, ensuring playbooks never execute as root.
+
 ### Multi-Device Two-Factor Authentication (Multiple TOTP Tokens per User)
 
 In production homelabs and enterprise environments, users often require
@@ -586,6 +621,38 @@ or `deployer`):
      Phone"`, marks the invite token as consumed, and issues a session cookie.
    * Both Alice and Bob can now independently log in as `root` using their
      respective authenticator apps!
+
+### Mandatory 2FA Enforcement Policy (`auth.require_2fa`)
+
+Crucible mandates two-factor authentication for all operators by default
+(`auth.require_2fa: true`). Operators can toggle or override this via
+`crucible.yaml`, `CRUCIBLE_AUTH_REQUIRE_2FA=false`, or `--no-require-2fa`:
+
+```yaml
+auth:
+  provider: "sqlite" # sqlite | pam
+  require_2fa: true  # defaults to true; set false to disable
+```
+
+When enabled:
+1. **Initial Login Interception**: If an operator authenticates with valid
+   credentials but has zero enrolled 2FA devices, the server redirects the
+   session to `/settings/2fa?enforce=true`.
+2. **Access Wall**: All operations routes (such as `/`, jobs, schedules)
+   intercept requests and redirect un-enrolled sessions back to the enrollment
+   view until at least one TOTP authenticator device is enrolled.
+3. **API Protection**: API login requests (`/api/v1/auth/login`) return HTTP
+   428 Precondition Required with `{"enrollment_required": true}` if the user
+   has no active 2FA devices registered.
+
+### User Profile & Account Dropdown Navigation
+
+To keep the primary operations sidebar focused purely on runner pipelines
+(Overview, Schedules, Inspector, Jobs, Clusters, Inventory, Vars), account
+security is housed in an Account Dropdown Menu located in the top-right header:
+1. Displays operator avatar initial, username, role, and auth provider.
+2. Provides direct navigation to **Security & 2FA** (`/settings/2fa`).
+3. Provides one-click **Sign Out** (`/logout`).
 
 ---
 
@@ -1982,13 +2049,17 @@ crucible/
     │   ├── broadcaster.go       # Non-blocking fan-out log broadcaster & disk logger
     │   └── pipeline.go          # Pipeline YAML parser & DAG runner
     │
-    ├── auth/                    # Linux PAM, Multi-Device 2FA & Session Feature
-    │   ├── models.go            # User, UserSession, TOTPDevice, TOTPInvite, Role, Permission
-    │   ├── pam.go               # Linux PAM (libpam.so.0) authenticator
-    │   ├── totp.go              # Multi-device RFC 6238 TOTP (multiple tokens per user, e.g. root)
-    │   ├── invite.go            # Secure TOTP invite URL generator & validator for shared accounts
-    │   ├── session.go           # Cryptographic web sessions & challenge tokens
-    │   └── rbac.go              # Role resolution (POSIX groups -> Viewer/Operator/Admin)
+    ├── auth/                    # Hexagonal CQRS Auth & 2FA Subsystem
+    │   ├── models.go            # UserIdentity, Role, Device, Session
+    │   ├── ports.go             # Inbound CQRS & Outbound SPI ports
+    │   ├── commands.go          # CommandService: write mutations
+    │   ├── queries.go           # QueryService: read queries
+    │   ├── adapter_pam.go       # Pure Go Linux PAM via unix_chkpwd
+    │   ├── adapter_sqlite.go    # SQLite persistence adapter
+    │   ├── adapter_memory.go    # In-memory mock adapter
+    │   ├── totp.go              # Pure Go RFC 6238 TOTP engine
+    │   ├── qr.go                # Pure Go SVG & ANSI QR generator
+    │   └── crypter.go           # AES-256-GCM envelope encryption
     │
     ├── tokens/                  # Personal Access Tokens (PATs) Feature
     │   ├── models.go            # APIToken, TokenMetadata (using ULID identifiers)
@@ -2716,25 +2787,60 @@ operator CLI and an embedded Web management console.
 * **Verification**: Start daemon, query `GET /healthz` over HTTP and UNIX
   socket, open browser to `http://localhost:8080/` to verify HTML rendering.
 
-#### Milestone 1-07: Linux PAM Authentication & Multi-Device TOTP 2FA
-* Implement Linux PAM system account authentication adapter
-  (`internal/auth/pam.go`).
-* Implement multi-device RFC 6238 TOTP engine with encrypted keys and QR code
-  generation (`internal/auth/totp.go`).
-* Implement cryptographically signed onboarding invite URLs for shared accounts
-  (e.g. `root`) in `internal/auth/invite.go`.
-* Implement web session cookie manager with constant-time token comparison.
+#### Milestone 1-07: Hexagonal Authentication & Multi-Device TOTP 2FA
+* Implement Hexagonal CQRS architecture in `internal/auth/`:
+  * Define outbound SPI ports in `ports.go`: `Authenticator` (SPI provider
+    contract supporting Linux PAM, local database, LDAP, and OAuth2/OIDC),
+    `DeviceStore`, `SessionStore`, `ChallengeStore`, `InviteStore`, and
+    `SecretCrypter`.
+  * Define inbound CQRS ports in `ports.go`: `CommandHandler` (mutations for
+    login, 2FA challenge verification, device enrollment, invite redemption)
+    and `QueryHandler` (read queries for session validation and device lists).
+  * Implement domain models in `models.go` (`UserIdentity`, `Role`, `Session`,
+    `TOTPDevice`, `TOTPInvite`, `Challenge`).
+  * Implement Linux PAM authenticator adapter (`adapter_pam.go`) using pure Go
+    parameterized `unix_chkpwd` execution (`CGO_ENABLED=0`).
+  * Implement SQLite persistence adapter (`adapter_sqlite.go`) mapping
+    devices, sessions, challenges, and invites to SQLite schema.
+  * Implement AES-256-GCM envelope encryption (`crypter.go`) securing TOTP
+    secrets at rest.
+  * Implement pure Go RFC 6238 TOTP engine (`totp.go`) with drift window
+    tolerance and SVG QR code generator (`qr.go`).
+  * Implement CQRS services: `CommandService` and `QueryService` in
+    `commands.go` and `queries.go`.
 * Wire Operator CLI commands (`cmd/cruciblectl/auth.go`):
-  * `cruciblectl auth login` (PAM + TOTP interactive prompt).
+  * `cruciblectl auth login` (interactive PAM + TOTP challenge prompt).
   * `cruciblectl auth 2fa devices` & `cruciblectl auth 2fa revoke <device-id>`.
   * `cruciblectl auth 2fa invite --username root --label <name>`.
-* Wire Web UI views:
-  * `/login`: PAM username and password authentication form.
+* Wire Web UI views in `internal/server/` and `web/templates/`:
+  * `/login`: Username and password authentication form.
   * `/auth/2fa`: 6-digit TOTP verification challenge page.
-  * `/settings/2fa`: Enrolled devices table, QR code enrollment modal, and
-    shared account invite URL generator.
+  * `/settings/2fa`: Enrolled devices table, QR enrollment modal, and shared
+    account invite generator.
 * **Verification**: Authenticate via CLI and browser, enroll a TOTP device via
-  QR code, test multi-device login, and redeem an invite link.
+  QR code, test multi-device login, redeem an invite link, and test mock/DB
+  authenticator decoupling with race detection.
+
+#### Milestone 1-07b: Native SQLite Users & Rootless Auth Engine
+* Implement pure Go Argon2id password hashing in `internal/auth/hasher.go`
+  utilizing `golang.org/x/crypto/argon2` with PHC string formatting.
+* Author raw SQL migration `004_users_auth.sql`:
+  * Add `password_hash TEXT`, `role TEXT NOT NULL DEFAULT 'viewer'`, and
+    `is_active INTEGER NOT NULL DEFAULT 1` to `users` table.
+* Implement `SQLiteAuthenticator` (`internal/auth/adapter_sqlite.go`)
+  satisfying the `Authenticator` SPI port:
+  * Verifies Argon2id hashes, retrieves user roles, and verifies active state.
+  * Enables 100% rootless production execution under `User=crucible`.
+* Wire CLI user lifecycle commands (`cmd/crucibled/user.go`):
+  * `crucibled user add --username <user> --role <role>` (prompts password).
+  * `crucibled user passwd <user>` (secure password update).
+  * `crucibled user list` (tabular user list with role and last login).
+  * `crucibled user delete <user>` (with confirmation prompt).
+* Wire Web UI views:
+  * `/settings/users`: User administration table with role badges and actions.
+  * `/setup`: First-boot onboarding setup wizard if zero admin accounts exist.
+* **Verification**: Add users via CLI, log in via Web UI and CLI without root,
+  verify Argon2id verification with race detector, test user deactivation.
 
 #### Milestone 1-08: Personal Access Tokens Subsystem (`internal/tokens/`)
 * Implement high-entropy token generation (`cb_pat_<32-byte-hex>`) with SHA-256
@@ -2800,6 +2906,14 @@ operator CLI and an embedded Web management console.
 * Implement subprocess playbook runner (`internal/engine/exec_local.go`) using
   `exec.CommandContext` with parameterized arguments and FIFO password
   injection.
+* Implement subprocess privilege dropping and sandboxing:
+  * When running as root (e.g. PAM mode), drop privileges for playbook
+    subprocesses via `SysProcAttr.Credential = &syscall.Credential{Uid: uid,
+    Gid: gid}` to the configured `engine.execution_user` (`crucible`).
+  * When running rootless (SQLite mode), subprocesses inherit the unprivileged
+    `crucible` execution context directly, guaranteeing zero root playbook
+    execution across all deployment modes.
+  * Apply `Pdeathsig: syscall.SIGKILL` to prevent orphan child processes.
 * Implement zero-RAM disk log streaming (`internal/reports/`):
   * Stream stdout and stderr directly to append-only disk files:
     `var/reports/{shard}/{run_ulid}_{job_slug}.log`.

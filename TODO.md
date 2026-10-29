@@ -77,16 +77,46 @@ Format: `[state] (Priority) [domain/binary] Task description @assignee +tag`
       via Go //go:embed @jovens@gotcode.org +phase1 +web
 - [x] (B) [web] Implement base HTML5 layout, CSS stylesheets, navigation bar,
       and dark mode styling @jovens@gotcode.org +phase1 +web
-- [ ] (B) [auth] Implement Linux PAM authentication adapter for system accounts
-      in internal/auth @jovens@gotcode.org +phase1 +auth +security
-- [ ] (B) [auth] Implement multi-device RFC 6238 TOTP 2FA engine with encrypted
-      keys and QR generator @jovens@gotcode.org +phase1 +auth +security
-- [ ] (B) [auth] Implement cryptographically signed shared-account onboarding
-      invite URLs @jovens@gotcode.org +phase1 +auth +security
-- [ ] (B) [cruciblectl] Implement cruciblectl auth login, 2fa devices, and 2fa
+- [x] (A) [auth] Define hexagonal ports (Authenticator, DeviceStore,
+      SessionStore, ChallengeStore, InviteStore, CommandHandler, QueryHandler)
+      and domain models in internal/auth @jovens@gotcode.org +phase1 +auth
+      +security
+- [x] (B) [auth] Implement Linux PAM authenticator adapter (unix_chkpwd,
+      CGO_ENABLED=0) with pluggable interface for DB/LDAP/OAuth
+      @jovens@gotcode.org +phase1 +auth +security
+- [x] (B) [auth] Implement AES-256-GCM envelope encryption and RFC 6238
+      multi-device TOTP 2FA engine with pure Go SVG QR code generator
+      @jovens@gotcode.org +phase1 +auth +security
+- [x] (B) [auth] Implement SQLite storage adapter for user_totp_devices,
+      sessions, auth_challenges, and totp_invites @jovens@gotcode.org +phase1
+      +auth +storage
+- [x] (B) [auth] Implement CQRS CommandService and QueryService with pre-auth
+      challenges and shared account invite URLs @jovens@gotcode.org +phase1
+      +auth +security
+- [x] (B) [cruciblectl] Implement cruciblectl auth login, 2fa devices, and 2fa
       invite commands @jovens@gotcode.org +phase1 +cruciblectl +auth
-- [ ] (B) [web] Implement Web UI /login, /auth/2fa challenge, and /settings/2fa
+- [x] (B) [web] Implement Web UI /login, /auth/2fa challenge, and /settings/2fa
       device management views @jovens@gotcode.org +phase1 +web +auth
+- [x] (B) [config] Add auth.provider (sqlite | pam), require_2fa, and
+      engine.execution_user to ServerConfig @jovens@gotcode.org +phase1 +config
+      +auth
+- [x] (A) [auth] Implement pure Go Argon2id hashing and verification in
+      internal/auth @jovens@gotcode.org +phase1 +auth +security
+- [x] (A) [storage] Author schema migration 004_sqlite_users.sql with
+      password_hash, role, and is_active columns @jovens@gotcode.org +phase1
+      +storage +auth
+- [x] (A) [auth] Implement SQLiteAuthenticator adapter satisfying Authenticator
+      port for rootless execution @jovens@gotcode.org +phase1 +auth +security
+- [x] (B) [crucibled] Implement crucibled user add, passwd, list, and delete
+      management CLI commands @jovens@gotcode.org +phase1 +crucibled +auth
+- [x] (B) [web] Implement header Account Dropdown Menu and mandatory 2FA
+      enforcement policy when auth.require_2fa is enabled @jovens@gotcode.org
+      +phase1 +web +auth
+- [ ] (B) [web] Implement Web UI /settings/users management view and initial
+      admin bootstrap wizard @jovens@gotcode.org +phase1 +web +auth
+- [ ] (B) [crucibled] Add rootless service account (User=crucible) vs PAM
+      (User=root) profiles to systemd unit command @jovens@gotcode.org +phase1
+      +crucibled +systemd
 - [ ] (A) [tokens] Implement internal/tokens package with high-entropy token
       generator, SHA-256 hashing, and scope validator @jovens@gotcode.org
       +phase1 +tokens +security
@@ -117,8 +147,9 @@ Format: `[state] (Priority) [domain/binary] Task description @assignee +tag`
       @jovens@gotcode.org +phase1 +cruciblectl +secrets
 - [ ] (B) [web] Implement Web UI /settings/vault view with seal status banner
       and interactive unseal modal @jovens@gotcode.org +phase1 +web +secrets
-- [ ] (A) [engine] Implement internal/engine package with Python venv manager
-      and subprocess playbook runner @jovens@gotcode.org +phase1 +engine
+- [ ] (A) [engine] Implement internal/engine package with Python venv manager,
+      subprocess privilege dropping (SysProcAttr.Credential), and playbook
+      runner @jovens@gotcode.org +phase1 +engine +security
 - [ ] (A) [reports] Implement internal/reports package with zero-RAM disk log
       streaming in var/reports/{shard}/ @jovens@gotcode.org +phase1 +reports
 - [ ] (A) [reports] Implement non-blocking live log fan-out hub with bounded
@@ -200,11 +231,11 @@ Format: `[state] (Priority) [domain/binary] Task description @assignee +tag`
 ## Phase 4: Embedded Web UI, Native TLS & Live Streaming (v0.4.0)
 - [ ] (B) [tls] Implement native ACME Let's Encrypt TLS-ALPN-01 and custom
       cert loader in internal/tls @jovens@gotcode.org +phase4 +tls +security
-- [ ] (B) [auth] Implement Linux PAM authentication adapter for system accounts
+- [x] (B) [auth] Implement Linux PAM authentication adapter for system accounts
       in internal/auth @jovens@gotcode.org +phase4 +auth +security
-- [ ] (B) [auth] Implement multi-device RFC 6238 TOTP 2FA engine with encrypted
+- [x] (B) [auth] Implement multi-device RFC 6238 TOTP 2FA engine with encrypted
       keys and QR generator @jovens@gotcode.org +phase4 +auth +security
-- [ ] (B) [auth] Implement cryptographically signed shared-account onboarding
+- [x] (B) [auth] Implement cryptographically signed shared-account onboarding
       invite URLs @jovens@gotcode.org +phase4 +auth +security
 - [ ] (B) [web] Embed web/templates/ and web/static/ assets into daemon via
       Go //go:embed @jovens@gotcode.org +phase4 +web

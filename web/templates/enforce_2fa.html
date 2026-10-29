@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="en" class="h-full dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Two-Factor Setup Required — Crucible Ops</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/static/css/style.css" />
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ['"Plus Jakarta Sans"', 'sans-serif'],
+            mono: ['"JetBrains Mono"', 'monospace'],
+          },
+        },
+      },
+    }
+  </script>
+</head>
+<body class="bg-[#09090b] text-zinc-100 min-h-full flex flex-col justify-center items-center p-4 sm:p-6 bg-grid antialiased selection:bg-emerald-500/30 selection:text-emerald-200 relative overflow-x-hidden font-sans">
+
+  <!-- Ambient Glow -->
+  <div class="fixed top-1/4 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[520px] h-[320px] bg-emerald-500/10 rounded-full blur-[140px] pointer-events-none"></div>
+
+  <!-- 640px Email-Style Card Window -->
+  <main class="w-full max-w-[640px] relative z-10 my-6 bg-[#121215] border border-[#27272a] border-t-4 border-t-emerald-500 rounded-xl overflow-hidden shadow-2xl shadow-black/80">
+
+    <!-- Top Brand & Lifecycle Badge Header -->
+    <div class="px-6 py-5 bg-[#18181b] border-b border-[#27272a] flex items-center justify-between">
+      <div class="flex items-center gap-3">
+        <div class="w-8 h-8 rounded-lg bg-emerald-500/10 border border-emerald-500/40 flex items-center justify-center text-emerald-400 font-mono font-bold text-xs">
+          &gt;_
+        </div>
+        <div>
+          <div class="font-extrabold tracking-tight text-white text-sm leading-none">CRUCIBLE</div>
+          <div class="font-mono text-[10px] text-emerald-400 mt-0.5">RUNNER ENGINE {{ .Version }}</div>
+        </div>
+      </div>
+      <div class="inline-flex items-center gap-2 px-3 py-1 rounded-md bg-emerald-500/10 border border-emerald-500/30 font-mono text-[11px] font-bold tracking-wider text-emerald-400 uppercase">
+        <span class="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+        <span>2FA MANDATORY</span>
+      </div>
+    </div>
+
+    <!-- Main Card Body -->
+    <div class="p-6 sm:p-8 space-y-6">
+
+      <!-- Headline & Notice -->
+      <div>
+        <div class="font-mono text-[11px] uppercase tracking-wider text-emerald-400 mb-1.5">
+          SECURITY POLICY :: ONBOARDING_ENROLLMENT &bull; {{ upper .OperatorUser }}
+        </div>
+        <h1 class="text-xl sm:text-2xl font-extrabold text-white tracking-tight leading-snug">
+          Two-Factor Authentication Required
+        </h1>
+        <p class="text-zinc-400 text-xs sm:text-sm mt-1.5 leading-relaxed">
+          Crucible requires two-factor authentication to secure operator sessions. Scan the QR code with your authenticator app (Google Authenticator, 1Password, Bitwarden, etc.) to complete enrollment and unlock the command center.
+        </p>
+      </div>
+
+      <!-- 3-Column Policy Matrix Strip (matching email template KPI strip) -->
+      <div class="grid grid-cols-1 sm:grid-cols-3 gap-2.5 font-mono text-xs">
+        <div class="bg-[#09090b] border border-[#27272a] rounded-lg p-3">
+          <div class="text-[10px] text-zinc-500 uppercase tracking-wider">OPERATOR ACCOUNT</div>
+          <div class="text-sm font-bold text-white mt-1 truncate">{{ .OperatorUser }}</div>
+        </div>
+        <div class="bg-[#09090b] border border-[#27272a] rounded-lg p-3">
+          <div class="text-[10px] text-zinc-500 uppercase tracking-wider">SECURITY MATRIX</div>
+          <div class="text-sm font-bold text-emerald-400 mt-1">RFC 6238 TOTP</div>
+        </div>
+        <div class="bg-[#09090b] border border-[#27272a] rounded-lg p-3">
+          <div class="text-[10px] text-zinc-500 uppercase tracking-wider">KEY CIPHER</div>
+          <div class="text-sm font-bold text-cyan-400 mt-1">AES-256-GCM</div>
+        </div>
+      </div>
+
+      {{ if .Error }}
+      <div class="rounded-lg bg-rose-500/10 border border-rose-500/30 px-4 py-3 text-xs text-rose-400 font-mono text-center">
+        {{ .Error }}
+      </div>
+      {{ end }}
+
+      {{ if .Message }}
+      <div class="rounded-lg bg-emerald-500/10 border border-emerald-500/30 px-4 py-3 text-xs text-emerald-400 font-mono text-center">
+        {{ .Message }}
+      </div>
+      {{ end }}
+
+      {{ if .EnrollPrep }}
+      <!-- Enrollment Interface: QR Code + Secret + Form -->
+      <div class="bg-[#09090b] border border-[#27272a] rounded-xl p-5 space-y-5">
+        <div class="flex flex-col sm:flex-row items-center gap-5">
+          <div class="p-2.5 bg-white rounded-lg shadow-md shrink-0">
+            <div class="w-36 h-36 flex items-center justify-center">
+              {{ .EnrollPrep.QRCodeSVG | safeHTML }}
+            </div>
+          </div>
+          <div class="space-y-2 w-full text-center sm:text-left">
+            <div class="text-[10px] font-mono uppercase tracking-wider text-zinc-500">
+              Manual Entry Secret Key
+            </div>
+            <div class="text-xs font-mono text-emerald-400 bg-[#121215] p-2.5 rounded border border-[#27272a] break-all select-all font-semibold tracking-wider text-center">
+              {{ .EnrollPrep.SecretBase32 }}
+            </div>
+            <p class="text-[11px] text-zinc-500 leading-normal">
+              Can't scan? Enter the base32 secret manually in your authenticator app.
+            </p>
+          </div>
+        </div>
+
+        <form action="/settings/2fa/enroll" method="POST" class="space-y-4 pt-2 border-t border-[#1f1f23]">
+          <input type="hidden" name="secret_base32" value="{{ .EnrollPrep.SecretBase32 }}" />
+
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+            <div class="space-y-1">
+              <label for="device_name" class="block text-[10px] font-mono uppercase tracking-wider text-zinc-400">
+                Device Name
+              </label>
+              <input
+                type="text"
+                id="device_name"
+                name="device_name"
+                value="Primary Authenticator"
+                required
+                class="w-full px-3 py-2 text-xs font-mono bg-[#121215] border border-[#27272a] rounded-lg text-zinc-200 outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500/30"
+              />
+            </div>
+            <div class="space-y-1">
+              <label for="enroll_passcode" class="block text-[10px] font-mono uppercase tracking-wider text-zinc-400">
+                6-Digit Passcode
+              </label>
+              <input
+                type="text"
+                id="enroll_passcode"
+                name="passcode"
+                inputmode="numeric"
+                pattern="[0-9]{6}"
+                maxlength="6"
+                required
+                autofocus
+                autocomplete="one-time-code"
+                placeholder="123456"
+                class="w-full text-center text-lg tracking-[0.3em] font-mono py-1.5 bg-[#121215] border border-[#27272a] rounded-lg text-emerald-400 focus:border-emerald-400 focus:ring-1 focus:ring-emerald-500/30 outline-none transition-all"
+              />
+            </div>
+          </div>
+
+          <button
+            type="submit"
+            class="w-full py-2.5 px-4 rounded-lg text-sm font-bold text-zinc-950 bg-gradient-to-r from-emerald-400 to-cyan-400 hover:from-emerald-300 hover:to-cyan-300 shadow-lg shadow-emerald-500/15 transition-all active:scale-[0.99] flex items-center justify-center gap-2 cursor-pointer mt-2"
+          >
+            <span>Verify & Unlock Dashboard</span>
+            <span class="font-mono">&rarr;</span>
+          </button>
+        </form>
+      </div>
+      {{ end }}
+
+    </div>
+
+    <!-- Bottom Metadata Strip -->
+    <div class="px-6 py-3.5 bg-[#18181b] border-t border-[#27272a] flex items-center justify-between text-xs font-mono text-zinc-500">
+      <span>CRUCIBLE CONTROL PLANE</span>
+      <a href="/logout" class="text-zinc-400 hover:text-emerald-400 transition-colors">
+        &larr; Sign Out
+      </a>
+    </div>
+
+  </main>
+</body>
+</html>

@@ -31,6 +31,7 @@ type ServerFlagOverrides struct {
 	LogFormat      *string
 	GitRepoURL     *string
 	GitBranch      *string
+	Require2FA     *bool
 }
 
 // ClientFlagOverrides captures CLI flag overrides for client profiles.
@@ -273,6 +274,7 @@ func (s *QueryService) applyServerEnv(cfg *ServerConfig) {
 	s.applyServerEnvStorage(cfg)
 	s.applyServerEnvCluster(cfg)
 	s.applyServerEnvTLS(cfg)
+	s.applyServerEnvAuth(cfg)
 }
 
 func (s *QueryService) applyServerEnvNet(cfg *ServerConfig) {
@@ -347,6 +349,18 @@ func (s *QueryService) applyServerEnvTLS(cfg *ServerConfig) {
 	}
 }
 
+func (s *QueryService) applyServerEnvAuth(cfg *ServerConfig) {
+	if val, ok := s.envReader.LookupEnv("CRUCIBLE_AUTH_REQUIRE_2FA"); ok {
+		if b, err := strconv.ParseBool(val); err == nil {
+			cfg.Auth.Require2FA = b
+		}
+	}
+	if val, ok := s.envReader.LookupEnv("CRUCIBLE_AUTH_PROVIDER"); ok &&
+		val != "" {
+		cfg.Auth.Provider = val
+	}
+}
+
 func (s *QueryService) applyServerFlags(cfg *ServerConfig, flags ServerFlagOverrides) {
 	s.applyServerFlagsNet(cfg, flags)
 	s.applyServerFlagsStorage(cfg, flags)
@@ -398,6 +412,9 @@ func (s *QueryService) applyServerFlagsMeta(cfg *ServerConfig, flags ServerFlagO
 	}
 	if flags.GitBranch != nil && *flags.GitBranch != "" {
 		cfg.Git.Branch = *flags.GitBranch
+	}
+	if flags.Require2FA != nil {
+		cfg.Auth.Require2FA = *flags.Require2FA
 	}
 }
 

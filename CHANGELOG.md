@@ -41,6 +41,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   - Embedded Web Shell Subsystem ([`web/`](./web/)) utilizing Go `//go:embed`
     to package HTML5 templates, Tailwind CSS styles, JetBrains Mono font
     stacks, custom scrollbars, and client scripts into the binary.
+  - Hexagonal CQRS Authentication & Multi-Device TOTP Subsystem
+    ([`internal/auth/`](./internal/auth/)) providing outbound SPI ports
+    (`Authenticator`, `DeviceStore`, `SessionStore`, `ChallengeStore`,
+    `InviteStore`, and `SecretCrypter`), inbound CQRS ports (`CommandHandler`
+    and `QueryHandler`), pure Go Linux PAM adapter via `/sbin/unix_chkpwd`
+    with zero Cgo (`CGO_ENABLED=0`), RFC 6238 TOTP engine with drift tolerance,
+    SVG vector and ANSI terminal QR generators, AES-256-GCM envelope
+    encryption, and SQLite/in-memory persistence adapters.
 - **Database Schemas & Migrations**:
   - `001_initial.sql`: Initial relational schema defining 18 core tables
     with monotonic ULID primary keys and foreign key constraints.
@@ -70,6 +78,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     `cruciblectl` CLI
     ([`cmd/cruciblectl/version.go`](./cmd/cruciblectl/version.go)) with
     optional dependency tree flag (`-d`, `--dependencies`).
+  - Added `auth login`, `auth 2fa devices`, `auth 2fa revoke`, and `auth 2fa
+    invite` subcommands to `cruciblectl`
+    ([`cmd/cruciblectl/auth.go`](./cmd/cruciblectl/auth.go)) for operator
+    credential authentication, multi-device management, and single-use
+    onboarding invite generation with terminal QR codes.
+- **Web Console Views & Templates**:
+  - Added standalone `/login` authentication form and `/auth/2fa` challenge
+    verification page with branded responsive layout.
+  - Added `/settings/2fa` multi-device security management dashboard with
+    device revocation, registration modals, and invite issuance.
 - **Repository Architecture & Governance**:
   - Technical blueprint specifications ([`PLAN.md`](./PLAN.md),
     [`ARCHITECTURE.md`](./ARCHITECTURE.md)).
