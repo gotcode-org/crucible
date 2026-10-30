@@ -185,7 +185,7 @@ Format: `[state] (Priority) [domain/binary] Task description @assignee +tag`
 - [x] (A) [server] Require core HTTP dependencies explicitly and remove
       inbound-adapter fallback construction of storage and token services
       @jovens@gotcode.org +phase1 +server +architecture
-- [ ] (A) [server] Bound all inbound JSON request bodies and reject oversized
+- [x] (A) [server] Bound all inbound JSON request bodies and reject oversized
       payloads consistently; cover token and authentication endpoints
       @jovens@gotcode.org +phase1 +server +security
 - [x] (A) [tokens] Reject token creation for unknown users without creating
@@ -197,15 +197,15 @@ Format: `[state] (Priority) [domain/binary] Task description @assignee +tag`
 - [x] (A) [auth] Enforce first-admin setup atomically across independent
       service instances and SQLite connections; test concurrent setup attempts
       @jovens@gotcode.org +phase1 +auth +storage +concurrency
-- [ ] (A) [storage] Make concurrent SQLite migration startup deterministic;
+- [x] (A) [storage] Make concurrent SQLite migration startup deterministic;
       test independent connections, applied-version state, and rollback
       behavior @jovens@gotcode.org +phase1 +storage +concurrency
 - [ ] (B) [storage] Decouple SQLite adapter options from application config
       and translate config at the composition root; add only required options
       @jovens@gotcode.org +phase1 +storage +architecture
 - [ ] (A) [docs] Specify shared management API behavior for web and CLI over
-      remote HTTP(S) and Unix sockets, including the local-admin trust boundary,
-      authz, errors, and validation for existing endpoints
+      remote HTTP(S) and Unix sockets; record current PAT-scope gaps and propose
+      the role/scope/transport contract for owner decision before enforcement
       @jovens@gotcode.org +phase1 +docs +api
 - [ ] (A) [shared] Close the architecture stabilization gate: record each
       finding's disposition, complete tests and required checks, and do not

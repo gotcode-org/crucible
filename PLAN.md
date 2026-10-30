@@ -3107,8 +3107,10 @@ database adapters or a generic SQL dialect/repository framework.
 5. **Current HTTP API safety:** Document auth and error behavior for existing
    routes across remote TCP and the intentional local-admin socket trust
    boundary. Bound inbound JSON request bodies and test the current handlers'
-   auth, validation, and error cases. Defer streaming lifecycle contracts to
-   the runner/log-stream milestone.
+   auth, validation, and error cases. Record that PAT scopes are currently
+   metadata only; propose the role/scope/transport contract for owner decision
+   before implementing scope enforcement. Defer streaming lifecycle contracts
+   to the runner/log-stream milestone.
 6. **Verification:** Add focused tests for changed storage boundaries,
    transaction rollback, setup races, migration races, and existing API
    request limits/auth behavior. Run required repository checks before closing

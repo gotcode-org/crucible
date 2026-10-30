@@ -3,19 +3,22 @@
 > **Purpose:** Verified local state and concise guidance for the next development session.
 > **Last updated:** 2026-10-30
 > **Repository:** `/home/jovens/code/forks/crucible`
-> **Branch:** `repair/storage-boundary-hardening`
-> **HEAD:** Local follow-up commit on top of `854b304cdac232363c6f556e6562cbc8cbf48871`.
-> **Working tree:** Clean.
+> **Branch:** `pr/phase1-stabilization`
+> **HEAD:** Single DCO-signed PR summary commit based on `origin/main` at
+> `854b304`; see `git log -1` for its full hash.
+> **Working tree:** Clean after the PR summary commit.
 
 ## Current checkout
 
-- `upstream/main` and the fork's `origin/main` are at `854b304`. The fork was
-  fast-forwarded before preparing the local follow-up commit.
-- The local follow-up commit is not pushed. The existing tag and remote
-  `repair/storage-boundary-hardening` branch still point to the earlier commit
-  that upstream has already merged.
-- This document reports only the checkout above. It does not claim to know the
-  state of another private-server checkout or GitHub mirror.
+- `origin/main` and `upstream/main` are at `854b304`; this is the base of the
+  single-commit PR summary.
+- The original development branch `repair/storage-boundary-hardening` remains
+  local. Its changes were pushed to `origin/repair/sqlite-startup-safety` at
+  `4f18a57` before preparing the summary commit.
+- The summary branch `pr/phase1-stabilization` and signed tag
+  `pr/sqlite-startup-safety-for-v0.1.0` identify the consolidated changes.
+- The hosting service PR state has not been verified. Do not infer PR status
+  from branch or tag refs.
 
 ## Project direction to preserve
 
@@ -50,25 +53,43 @@
 
 ## Remaining Phase 1 work
 
-`TODO.md` already tracks request-body limits, migration concurrency,
-configuration decoupling, API behavior documentation, and the architecture
-stabilization exit gate. Revalidate these against source before implementation.
-The audit ledger remains an existing later Phase 1 milestone. Distributed
-worker delivery semantics remain design work; the plan and roadmap reject an
-unqualified exactly-once guarantee.
+Migration startup is serialized using SQLite's database-level `BEGIN IMMEDIATE`
+lock with the applied-version check inside the lock. Bounded JSON decoding is
+implemented for every current JSON handler, using a 1 MiB limit and 413 for
+oversized requests. Regression tests cover independent SQLite adapters,
+rollback, decoder limits, and authenticated token/authentication endpoints.
+
+PAT scopes remain metadata and are not enforced. `docs/api.md` records current
+behavior and a proposed role/scope/transport contract, explicitly pending owner
+decisions about scope names, endpoint mapping, validation, and principal
+representation. Do not implement scope enforcement until those decisions are
+approved. SQLite configuration decoupling, the complete API contract, and the
+Phase 1 stabilization gate remain open in `TODO.md`. The audit ledger remains
+an existing later Phase 1 milestone. Distributed worker delivery semantics
+remain design work; the plan and roadmap reject an unqualified exactly-once
+guarantee.
 
 ## Verification status
 
 - `GOCACHE=/tmp/crucible-gocache GOTMPDIR=/tmp go test ./internal/storage ./internal/auth` — passed.
 - `GOCACHE=/tmp/crucible-gocache GOTMPDIR=/tmp go test ./internal/server ./cmd/crucibled` — passed with permission to bind local test sockets. The sandboxed run could not open sockets.
-- `GOCACHE=/tmp/crucible-gocache GOTMPDIR=/tmp make check` — passed, including
-  dependency verification, gosec, govulncheck, all tests with `CGO_ENABLED=0`,
-  and the full race-enabled suite.
+- `GOCACHE=/tmp/crucible-gocache GOTMPDIR=/tmp make check` — passed after the
+  migration, request-body, and test changes. This runs dependency
+  verification, gosec, govulncheck, CGO-disabled tests, and race tests.
 - `/home/jovens/go/bin/golangci-lint run ./...` — passed.
 - `GOCACHE=/tmp/crucible-gocache GOTMPDIR=/tmp make build` — passed for both
   binaries with `CGO_ENABLED=0`.
-- `git diff --check` — passed after the final documentation edits.
-- No tag update or push has been made for the local follow-up commit.
+- `CGO_ENABLED=0 GOCACHE=/tmp/crucible-gocache GOTMPDIR=/tmp go build ./...` —
+  passed after the current code changes.
+- `GOCACHE=/tmp/crucible-gocache GOTMPDIR=/tmp go test -race ./...` — passed
+  after the current code and test changes.
+- `XDG_CACHE_HOME=/tmp/crucible-xdg-cache GOCACHE=/tmp/crucible-gocache
+  GOTMPDIR=/tmp /home/jovens/go/bin/golangci-lint run ./...` — passed.
+- `git diff --check` — passed after the current documentation edits.
+- `git verify-tag pr/sqlite-startup-safety-for-v0.1.0` — passed; the signed
+  tag targets summary commit `c57b9f1`.
+- The summary branch and updated signed tag were pushed to the fork. The
+  hosting-service PR state remains unverified.
 
 ## Working rules
 
@@ -84,6 +105,9 @@ unqualified exactly-once guarantee.
 
 ## Next steps
 
-1. Review the local commit and this handoff.
-2. Wait for explicit owner approval before pushing the feature branch or
-   replacing/updating a signed PR tag.
+1. Finish and verify the current stabilization changes; update this handoff
+   with final checks and worktree status.
+2. Obtain an owner decision on the proposed authorization contract before
+   implementing PAT-scope enforcement.
+3. Verify PR status when the private Git remote is accessible. Do not commit,
+   tag, or push without the explicit approval required by `AGENTS.md`.

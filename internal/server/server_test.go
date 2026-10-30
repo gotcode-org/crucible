@@ -2185,7 +2185,76 @@ func TestAuthAPI_TokensAndDualTransport(t *testing.T) {
 	testAPIDualTransportTCPUnauth(t, tcpClient, baseURL)
 	testAPIDualTransportUnixSocket(t, unixClient)
 	rawToken, tokenID := testAPIDualTransportUnixCreate(t, unixClient)
+	testAPIBodyLimits(t, tcpClient, baseURL, rawToken)
 	testAPIDualTransportTCPBearer(t, tcpClient, baseURL, rawToken, tokenID)
+}
+
+func testAPIBodyLimits(
+	t *testing.T,
+	client *http.Client,
+	baseURL string,
+	rawToken string,
+) {
+	t.Helper()
+	getTokenCount := func() int {
+		t.Helper()
+		req, err := http.NewRequestWithContext(
+			context.Background(),
+			http.MethodGet,
+			baseURL+"/api/v1/tokens",
+			nil,
+		)
+		if err != nil {
+			t.Fatalf("creating token-list request: %v", err)
+		}
+		req.Header.Set("Authorization", "Bearer "+rawToken)
+		resp, err := client.Do(req)
+		if err != nil {
+			t.Fatalf("listing tokens: %v", err)
+		}
+		defer closeBody(t, resp)
+		var tokenList []tokens.APIToken
+		if err := json.NewDecoder(resp.Body).Decode(&tokenList); err != nil {
+			t.Fatalf("decoding token list: %v", err)
+		}
+		return len(tokenList)
+	}
+	tokenCount := getTokenCount()
+	oversized := `{"username":"alice","password":"correct-horse"}` +
+		strings.Repeat(" ", (1<<20)+1)
+	for _, endpoint := range []struct {
+		path  string
+		token string
+	}{
+		{path: "/api/v1/auth/login"},
+		{path: "/api/v1/tokens", token: rawToken},
+	} {
+		req, err := http.NewRequestWithContext(
+			context.Background(),
+			http.MethodPost,
+			baseURL+endpoint.path,
+			strings.NewReader(oversized),
+		)
+		if err != nil {
+			t.Fatalf("creating oversized request for %s: %v", endpoint.path, err)
+		}
+		req.Header.Set("Content-Type", "application/json")
+		if endpoint.token != "" {
+			req.Header.Set("Authorization", "Bearer "+endpoint.token)
+		}
+		resp, err := client.Do(req)
+		if err != nil {
+			t.Fatalf("sending oversized request to %s: %v", endpoint.path, err)
+		}
+		closeBody(t, resp)
+		if resp.StatusCode != http.StatusRequestEntityTooLarge {
+			t.Errorf("%s status = %d, want 413", endpoint.path, resp.StatusCode)
+		}
+	}
+	if got := getTokenCount(); got != tokenCount {
+		t.Errorf("oversized token request changed token count: %d -> %d",
+			tokenCount, got)
+	}
 }
 
 func testAPIDualTransportTCPUnauth(

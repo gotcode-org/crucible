@@ -931,8 +931,7 @@ func (s *HTTPServer) handleAPISetup(
 			Password        string `json:"password"`
 			ConfirmPassword string `json:"confirm_password"`
 		}
-		if dErr := json.NewDecoder(r.Body).Decode(&req); dErr != nil {
-			http.Error(w, "Invalid request body", http.StatusBadRequest)
+		if !decodeJSONRequest(w, r, &req) {
 			return
 		}
 
@@ -2206,8 +2205,7 @@ func (s *HTTPServer) handleAPILogin(w http.ResponseWriter, r *http.Request) {
 		Username string `json:"username"`
 		Password string `json:"password"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Invalid JSON payload", http.StatusBadRequest)
+	if !decodeJSONRequest(w, r, &req) {
 		return
 	}
 
@@ -2288,8 +2286,7 @@ func (s *HTTPServer) handleAPIVerify2FA(
 		ChallengeToken string `json:"challenge_token"`
 		Passcode       string `json:"passcode"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Invalid JSON payload", http.StatusBadRequest)
+	if !decodeJSONRequest(w, r, &req) {
 		return
 	}
 
@@ -2343,8 +2340,7 @@ func (s *HTTPServer) handleAPIDevices(w http.ResponseWriter, r *http.Request) {
 			SecretBase32 string `json:"secret_base32"`
 			Passcode     string `json:"passcode"`
 		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			http.Error(w, "Invalid JSON payload", http.StatusBadRequest)
+		if !decodeJSONRequest(w, r, &req) {
 			return
 		}
 		dev, err := s.authCmd.EnrollDevice(r.Context(), auth.EnrollDeviceCommand{
@@ -2400,8 +2396,7 @@ func (s *HTTPServer) handleAPIInvite(w http.ResponseWriter, r *http.Request) {
 		Username string `json:"username"`
 		Label    string `json:"label"`
 	}
-	if decErr := json.NewDecoder(r.Body).Decode(&req); decErr != nil {
-		http.Error(w, "Invalid JSON payload", http.StatusBadRequest)
+	if !decodeJSONRequest(w, r, &req) {
 		return
 	}
 	if req.Username == "" {
@@ -2542,8 +2537,7 @@ func (s *HTTPServer) handleAPITokensPost(
 		Scopes    []string `json:"scopes"`
 		ExpiresIn string   `json:"expires_in"`
 	}
-	if dErr := json.NewDecoder(r.Body).Decode(&req); dErr != nil {
-		http.Error(w, "Invalid JSON payload", http.StatusBadRequest)
+	if !decodeJSONRequest(w, r, &req) {
 		return
 	}
 

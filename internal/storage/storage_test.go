@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"testing"
+	"testing/fstest"
 	"time"
 
 	"gotcode.org/crucible/internal/config"
@@ -25,6 +26,103 @@ func TestSQLiteAdapter_DoesNotExportSQLAccess(t *testing.T) {
 		if _, ok := typeOfAdapter.MethodByName(method); ok {
 			t.Errorf("SQLiteAdapter unexpectedly exports %s", method)
 		}
+	}
+}
+
+func TestSQLiteAdapter_ConcurrentMigrationStartup(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	dbPath := filepath.Join(t.TempDir(), "concurrent-migrations.db")
+	first, err := NewSQLiteAdapterPath(ctx, dbPath, false, 20000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if closeErr := first.Close(); closeErr != nil {
+			t.Errorf("closing first adapter: %v", closeErr)
+		}
+	}()
+	second, err := NewSQLiteAdapterPath(ctx, dbPath, false, 20000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if closeErr := second.Close(); closeErr != nil {
+			t.Errorf("closing second adapter: %v", closeErr)
+		}
+	}()
+
+	start := make(chan struct{})
+	results := make(chan error, 2)
+	for _, adapter := range []*SQLiteAdapter{first, second} {
+		go func(adapter *SQLiteAdapter) {
+			<-start
+			results <- adapter.Migrate(ctx)
+		}(adapter)
+	}
+	close(start)
+	for range 2 {
+		if err := <-results; err != nil {
+			t.Fatalf("concurrent migration failed: %v", err)
+		}
+	}
+
+	var count int
+	if err := first.db.QueryRowContext(
+		ctx,
+		"SELECT COUNT(*) FROM schema_migrations",
+	).Scan(&count); err != nil {
+		t.Fatalf("querying migration count: %v", err)
+	}
+	if count != 5 {
+		t.Fatalf("migration count = %d, want 5", count)
+	}
+}
+
+func TestSQLiteAdapter_FailedMigrationRollsBack(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	adapter, err := NewSQLiteAdapterPath(
+		ctx,
+		filepath.Join(t.TempDir(), "failed-migration.db"),
+		false,
+		5000,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if closeErr := adapter.Close(); closeErr != nil {
+			t.Errorf("closing adapter: %v", closeErr)
+		}
+	}()
+
+	fsys := fstest.MapFS{
+		"001_fails.sql": &fstest.MapFile{
+			Data: []byte("CREATE TABLE migration_rollback_probe (id INTEGER);\n" +
+				"THIS IS NOT SQL;"),
+		},
+	}
+	if err := adapter.migrateFS(ctx, fsys); err == nil {
+		t.Fatal("expected malformed migration to fail")
+	}
+	var tableCount, migrationCount int
+	if err := adapter.db.QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND "+
+			"name='migration_rollback_probe'",
+	).Scan(&tableCount); err != nil {
+		t.Fatal(err)
+	}
+	if err := adapter.db.QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM schema_migrations",
+	).Scan(&migrationCount); err != nil {
+		t.Fatal(err)
+	}
+	if tableCount != 0 || migrationCount != 0 {
+		t.Fatalf("failed migration persisted state: table=%d records=%d",
+			tableCount, migrationCount)
 	}
 }
 

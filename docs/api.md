@@ -13,6 +13,7 @@ Crucible exposes a RESTful JSON API alongside its embedded web console:
 - **Default Port**: `8080` (configurable via `server.http_port` or env)
 - **UNIX Domain Socket**: `/var/run/crucible/crucibled.sock` (mode `0660`)
 - **Content-Type**: `application/json; charset=utf-8`
+- **JSON request body limit**: 1 MiB; oversized requests receive `413`.
 - **Line Width Standard**: Documentation conforms to strict $\le 79$ columns.
 
 ### Authentication & Authorization Models
@@ -28,7 +29,43 @@ Crucible exposes a RESTful JSON API alongside its embedded web console:
      authenticated browser session. Local socket requests use the protected
      local-admin trust boundary described above.
    - Supports Personal Access Tokens (`cb_pat_...`) hashed with SHA-256
-     at rest, with granular role enforcement and expiration telemetry.
+     at rest, with role metadata and expiration/usage telemetry.
+
+### Authorization contract status
+
+This section records current behavior and a proposed contract for owner
+decision. The proposal does not change authorization behavior by itself.
+
+- **User roles** are currently used by handler-level checks to permit or deny
+  operations. The role set and per-operation permission matrix are not yet
+  specified here as a complete stable contract.
+- **PAT scopes** are stored and returned as token metadata. They are not
+  currently checked when authorizing requests; a PAT currently supplies its
+  associated username and role to the existing role checks. Scope restrictions
+  must not be assumed to work until enforcement is implemented.
+- **Transport authorization** currently authenticates remote TCP requests by
+  session or PAT. Requests accepted through the protected Unix socket are
+  mapped to the local-admin session described above. Both transports reach the
+  same handlers, but a complete shared authorization contract and parity tests
+  remain open.
+
+#### Proposed contract for owner review
+
+Keep three decisions distinct in the authorization model:
+
+1. A user's role defines the operations available to that user.
+2. A PAT's scopes define the subset of those operations available through that
+   particular credential. A token must never gain authority beyond its user.
+3. Transport authentication establishes a principal; it must not create a
+   second set of operation rules. The trusted local socket principal remains
+   the owner-approved local-admin identity, while remote requests use their
+   authenticated user identity.
+
+The following details require owner decisions before implementation: scope
+names and granularity, how scopes map to each existing endpoint, whether token
+creation validates requested scopes, and how the local-admin principal and
+browser sessions are represented in the common authorization checks. No new
+scope vocabulary or compatibility promise is established by this proposal.
 
 ---
 
@@ -439,6 +476,7 @@ The web console provides form-based endpoints for operator interactions:
 | `201`  | Created | Entity created successfully with payload. |
 | `204`  | No Content | Succeeded with empty body (e.g. deletion). |
 | `400`  | Bad Request | Malformed JSON or missing required fields. |
+| `413`  | Content Too Large | JSON request body exceeds 1 MiB. |
 | `401`  | Unauthorized | Missing session cookie or invalid credentials. |
 | `403`  | Forbidden | Access denied or self-action restriction. |
 | `404`  | Not Found | Requested entity (device/user) does not exist. |

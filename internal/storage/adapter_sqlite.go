@@ -193,7 +193,9 @@ func (a *SQLiteAdapter) Migrate(ctx context.Context) error {
 }
 
 func (a *SQLiteAdapter) migrateFS(ctx context.Context, fsys fs.FS) error {
-	if err := a.initMigrationTable(ctx); err != nil {
+	if err := a.withImmediateTransaction(ctx, func(conn *sql.Conn) error {
+		return a.initMigrationTable(ctx, conn)
+	}); err != nil {
 		return fmt.Errorf("initializing schema_migrations table: %w", err)
 	}
 
@@ -230,16 +232,7 @@ func (a *SQLiteAdapter) migrateFS(ctx context.Context, fsys fs.FS) error {
 		return files[i].version < files[j].version
 	})
 
-	applied, err := a.getAppliedVersions(ctx)
-	if err != nil {
-		return fmt.Errorf("querying applied migrations: %w", err)
-	}
-
 	for _, file := range files {
-		if applied[file.version] {
-			continue
-		}
-
 		data, readErr := fs.ReadFile(fsys, file.fileName)
 		if readErr != nil {
 			return fmt.Errorf("reading migration file %s: %w", file.fileName, readErr)
@@ -263,43 +256,18 @@ func (a *SQLiteAdapter) migrateFS(ctx context.Context, fsys fs.FS) error {
 	return nil
 }
 
-func (a *SQLiteAdapter) initMigrationTable(ctx context.Context) error {
+func (a *SQLiteAdapter) initMigrationTable(
+	ctx context.Context,
+	conn *sql.Conn,
+) error {
 	query := `
 CREATE TABLE IF NOT EXISTS schema_migrations (
     version    INTEGER PRIMARY KEY,
     name       TEXT NOT NULL,
     applied_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 );`
-	_, err := a.db.ExecContext(ctx, query)
+	_, err := conn.ExecContext(ctx, query)
 	return err
-}
-
-func (a *SQLiteAdapter) getAppliedVersions(
-	ctx context.Context,
-) (map[int]bool, error) {
-	rows, err := a.db.QueryContext(
-		ctx,
-		"SELECT version FROM schema_migrations ORDER BY version ASC",
-	)
-	if err != nil {
-		return nil, err
-	}
-	defer func() {
-		if closeErr := rows.Close(); closeErr != nil {
-			_ = closeErr
-		}
-	}()
-
-	applied := make(map[int]bool)
-	for rows.Next() {
-		var ver int
-		if err := rows.Scan(&ver); err != nil {
-			return nil, err
-		}
-		applied[ver] = true
-	}
-
-	return applied, rows.Err()
 }
 
 func (a *SQLiteAdapter) applyMigrationScript(
@@ -308,14 +276,26 @@ func (a *SQLiteAdapter) applyMigrationScript(
 	name string,
 	sqlScript string,
 ) error {
-	return a.withinTransaction(ctx, func(tx *sql.Tx) error {
-		if _, err := tx.ExecContext(ctx, sqlScript); err != nil {
+	return a.withImmediateTransaction(ctx, func(conn *sql.Conn) error {
+		var applied bool
+		if err := conn.QueryRowContext(
+			ctx,
+			"SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version = ?)",
+			version,
+		).Scan(&applied); err != nil {
+			return fmt.Errorf("checking migration version %d: %w", version, err)
+		}
+		if applied {
+			return nil
+		}
+
+		if _, err := conn.ExecContext(ctx, sqlScript); err != nil {
 			return fmt.Errorf("executing migration script: %w", err)
 		}
 
 		recordQuery := "INSERT INTO schema_migrations (version, name, applied_at) " +
 			"VALUES (?, ?, CURRENT_TIMESTAMP)"
-		if _, err := tx.ExecContext(
+		if _, err := conn.ExecContext(
 			ctx,
 			recordQuery,
 			version,
@@ -326,6 +306,44 @@ func (a *SQLiteAdapter) applyMigrationScript(
 
 		return nil
 	})
+}
+
+// withImmediateTransaction takes SQLite's database write lock before running
+// fn. This serializes migrations across adapters and processes sharing a file.
+func (a *SQLiteAdapter) withImmediateTransaction(
+	ctx context.Context,
+	fn func(conn *sql.Conn) error,
+) (retErr error) {
+	conn, err := a.db.Conn(ctx)
+	if err != nil {
+		return fmt.Errorf("acquiring migration connection: %w", err)
+	}
+	defer func() {
+		if err := conn.Close(); err != nil && retErr == nil {
+			retErr = fmt.Errorf("closing migration connection: %w", err)
+		}
+	}()
+
+	if _, err := conn.ExecContext(ctx, "BEGIN IMMEDIATE"); err != nil {
+		return fmt.Errorf("acquiring SQLite migration lock: %w", err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			if _, err := conn.ExecContext(context.Background(), "ROLLBACK"); err != nil && retErr == nil {
+				retErr = fmt.Errorf("rolling back migration transaction: %w", err)
+			}
+		}
+	}()
+
+	if err := fn(conn); err != nil {
+		return err
+	}
+	if _, err := conn.ExecContext(ctx, "COMMIT"); err != nil {
+		return fmt.Errorf("committing migration transaction: %w", err)
+	}
+	committed = true
+	return nil
 }
 
 // AppliedMigrations queries the historical record of applied migrations.
