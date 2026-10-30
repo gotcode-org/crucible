@@ -581,6 +581,58 @@ func (s *HTTPServer) handlePublicDashboard(
 	}
 }
 
+func (s *HTTPServer) authenticateOperator(
+	w http.ResponseWriter,
+	r *http.Request,
+) (*auth.Session, bool) {
+	if s.authQuery == nil {
+		return nil, true
+	}
+	sess, err := s.extractSession(r)
+	if err != nil || sess == nil {
+		http.Redirect(
+			w,
+			r,
+			"/login?next=/operator",
+			http.StatusFound,
+		)
+		return nil, false
+	}
+	if sess.MustChangePassword {
+		http.Redirect(
+			w,
+			r,
+			"/settings/password?enforce=true",
+			http.StatusFound,
+		)
+		return nil, false
+	}
+	if !sess.Can(auth.ActionSystemRead) {
+		http.Error(
+			w,
+			"Forbidden: Insufficient privileges",
+			http.StatusForbidden,
+		)
+		return nil, false
+	}
+	if s.cfg.Require2FA {
+		devices, dErr := s.authQuery.ListDevices(
+			r.Context(),
+			auth.ListDevicesQuery{Username: sess.Username},
+		)
+		if dErr == nil && len(devices) == 0 {
+			http.Redirect(
+				w,
+				r,
+				"/settings/2fa?enforce=true",
+				http.StatusFound,
+			)
+			return nil, false
+		}
+	}
+	return sess, true
+}
+
 func (s *HTTPServer) handleOperatorDashboard(
 	w http.ResponseWriter,
 	r *http.Request,
@@ -599,43 +651,9 @@ func (s *HTTPServer) handleOperatorDashboard(
 		}
 	}
 
-	var session *auth.Session
-	if s.authQuery != nil {
-		sess, err := s.extractSession(r)
-		if err != nil || sess == nil {
-			http.Redirect(
-				w,
-				r,
-				"/login?next=/operator",
-				http.StatusFound,
-			)
-			return
-		}
-		if sess.MustChangePassword {
-			http.Redirect(
-				w,
-				r,
-				"/settings/password?enforce=true",
-				http.StatusFound,
-			)
-			return
-		}
-		if s.cfg.Require2FA {
-			devices, dErr := s.authQuery.ListDevices(
-				r.Context(),
-				auth.ListDevicesQuery{Username: sess.Username},
-			)
-			if dErr == nil && len(devices) == 0 {
-				http.Redirect(
-					w,
-					r,
-					"/settings/2fa?enforce=true",
-					http.StatusFound,
-				)
-				return
-			}
-		}
-		session = sess
+	session, ok := s.authenticateOperator(w, r)
+	if !ok {
+		return
 	}
 
 	st := s.queryStorageStatus(r.Context())
@@ -708,9 +726,11 @@ func (s *HTTPServer) extractSession(r *http.Request) (*auth.Session, error) {
 					)
 				}
 				return &auth.Session{
-					ID:       tok.ID,
-					Username: tok.Username,
-					Role:     tok.Role,
+					ID:             tok.ID,
+					Username:       tok.Username,
+					Role:           tok.Role,
+					Scopes:         tok.Scopes,
+					CredentialKind: auth.CredentialToken,
 				}, nil
 			}
 
@@ -719,10 +739,15 @@ func (s *HTTPServer) extractSession(r *http.Request) (*auth.Session, error) {
 					"auth query unconfigured",
 				)
 			}
-			return s.authQuery.ValidateSession(
+			sess, err := s.authQuery.ValidateSession(
 				r.Context(),
 				auth.ValidateSessionQuery{SessionID: token},
 			)
+			if err != nil {
+				return nil, err
+			}
+			sess.CredentialKind = auth.CredentialSession
+			return sess, nil
 		}
 	}
 
@@ -731,19 +756,25 @@ func (s *HTTPServer) extractSession(r *http.Request) (*auth.Session, error) {
 		if s.authQuery == nil {
 			return nil, errors.New("auth query unconfigured")
 		}
-		return s.authQuery.ValidateSession(
+		sess, err := s.authQuery.ValidateSession(
 			r.Context(),
 			auth.ValidateSessionQuery{SessionID: cookie.Value},
 		)
+		if err != nil {
+			return nil, err
+		}
+		sess.CredentialKind = auth.CredentialSession
+		return sess, nil
 	}
 
 	if isUnix, ok := r.Context().Value(
 		contextKeyIsUnixSocket,
 	).(bool); ok && isUnix {
 		return &auth.Session{
-			ID:       "local-unix-socket",
-			Username: "local-operator",
-			Role:     auth.RoleAdmin,
+			ID:             "local-unix-socket",
+			Username:       "local-operator",
+			Role:           auth.RoleAdmin,
+			CredentialKind: auth.CredentialUnixSocket,
 		}, nil
 	}
 
@@ -1260,6 +1291,15 @@ func (s *HTTPServer) handleSettings2FA(
 		return
 	}
 
+	if !sess.Can(auth.ActionAccountRead) {
+		http.Error(
+			w,
+			"Forbidden: Insufficient privileges",
+			http.StatusForbidden,
+		)
+		return
+	}
+
 	var devices []auth.TOTPDevice
 	if s.authQuery != nil {
 		if devs, dErr := s.authQuery.ListDevices(
@@ -1353,6 +1393,15 @@ func (s *HTTPServer) handleSettings2FAEnroll(
 		return
 	}
 
+	if !sess.Can(auth.ActionAccountWrite) {
+		http.Error(
+			w,
+			"Forbidden: Insufficient privileges",
+			http.StatusForbidden,
+		)
+		return
+	}
+
 	name := strings.TrimSpace(r.FormValue("device_name"))
 	secret := strings.TrimSpace(r.FormValue("secret_base32"))
 	passcode := strings.TrimSpace(r.FormValue("passcode"))
@@ -1402,6 +1451,15 @@ func (s *HTTPServer) handleSettings2FARevoke(
 		return
 	}
 
+	if !sess.Can(auth.ActionAccountWrite) {
+		http.Error(
+			w,
+			"Forbidden: Insufficient privileges",
+			http.StatusForbidden,
+		)
+		return
+	}
+
 	deviceID := strings.TrimSpace(r.FormValue("device_id"))
 	if s.authCmd != nil {
 		if rErr := s.authCmd.RevokeDevice(r.Context(), auth.RevokeDeviceCommand{
@@ -1438,6 +1496,19 @@ func (s *HTTPServer) handleSettings2FAInvite(
 	label := strings.TrimSpace(r.FormValue("label"))
 	if targetUser == "" {
 		targetUser = sess.Username
+	}
+
+	reqAction := auth.ActionAccountWrite
+	if targetUser != sess.Username {
+		reqAction = auth.ActionUsersWrite
+	}
+	if !sess.Can(reqAction) {
+		http.Error(
+			w,
+			"Forbidden: Insufficient privileges",
+			http.StatusForbidden,
+		)
+		return
 	}
 
 	inv, err := s.authCmd.CreateInvite(r.Context(), auth.CreateInviteCommand{
@@ -1517,11 +1588,27 @@ func (s *HTTPServer) handleSettingsPassword(
 	}
 
 	if r.Method == http.MethodGet {
+		if !sess.Can(auth.ActionAccountRead) {
+			http.Error(
+				w,
+				"Forbidden: Insufficient privileges",
+				http.StatusForbidden,
+			)
+			return
+		}
 		s.handleSettingsPasswordGet(w, r, sess)
 		return
 	}
 
 	if r.Method == http.MethodPost {
+		if !sess.Can(auth.ActionAccountWrite) {
+			http.Error(
+				w,
+				"Forbidden: Insufficient privileges",
+				http.StatusForbidden,
+			)
+			return
+		}
 		s.handleSettingsPasswordPost(w, r, sess)
 		return
 	}
@@ -1681,9 +1768,10 @@ func mapChangePasswordError(err error, minLen int) string {
 	}
 }
 
-func (s *HTTPServer) requireAdmin(
+func (s *HTTPServer) requirePermission(
 	w http.ResponseWriter,
 	r *http.Request,
+	action auth.Action,
 ) (*auth.Session, bool) {
 	sess, err := s.extractSession(r)
 	if err != nil || sess == nil {
@@ -1699,10 +1787,10 @@ func (s *HTTPServer) requireAdmin(
 		)
 		return nil, false
 	}
-	if sess.Role != auth.RoleAdmin {
+	if !sess.Can(action) {
 		http.Error(
 			w,
-			"Forbidden: Admin privileges required",
+			"Forbidden: Insufficient privileges",
 			http.StatusForbidden,
 		)
 		return nil, false
@@ -1710,11 +1798,18 @@ func (s *HTTPServer) requireAdmin(
 	return sess, true
 }
 
+func (s *HTTPServer) requireAdmin(
+	w http.ResponseWriter,
+	r *http.Request,
+) (*auth.Session, bool) {
+	return s.requirePermission(w, r, auth.ActionUsersWrite)
+}
+
 func (s *HTTPServer) handleSettingsUsers(
 	w http.ResponseWriter,
 	r *http.Request,
 ) {
-	sess, ok := s.requireAdmin(w, r)
+	sess, ok := s.requirePermission(w, r, auth.ActionUsersRead)
 	if !ok {
 		return
 	}
@@ -2326,6 +2421,10 @@ func (s *HTTPServer) handleAPIDevices(w http.ResponseWriter, r *http.Request) {
 
 	switch r.Method {
 	case http.MethodGet:
+		if !sess.Can(auth.ActionAccountRead) {
+			http.Error(w, "Forbidden", http.StatusForbidden)
+			return
+		}
 		devices, err := s.authQuery.ListDevices(r.Context(), auth.ListDevicesQuery{
 			Username: sess.Username,
 		})
@@ -2335,6 +2434,10 @@ func (s *HTTPServer) handleAPIDevices(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, http.StatusOK, devices)
 	case http.MethodPost:
+		if !sess.Can(auth.ActionAccountWrite) {
+			http.Error(w, "Forbidden", http.StatusForbidden)
+			return
+		}
 		var req struct {
 			DeviceName   string `json:"device_name"`
 			SecretBase32 string `json:"secret_base32"`
@@ -2355,6 +2458,10 @@ func (s *HTTPServer) handleAPIDevices(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, http.StatusOK, dev)
 	case http.MethodDelete:
+		if !sess.Can(auth.ActionAccountWrite) {
+			http.Error(w, "Forbidden", http.StatusForbidden)
+			return
+		}
 		deviceID := r.URL.Query().Get("id")
 		if deviceID == "" {
 			http.Error(w, "Missing device id", http.StatusBadRequest)
@@ -2403,6 +2510,15 @@ func (s *HTTPServer) handleAPIInvite(w http.ResponseWriter, r *http.Request) {
 		req.Username = sess.Username
 	}
 
+	reqAction := auth.ActionAccountWrite
+	if req.Username != sess.Username {
+		reqAction = auth.ActionUsersWrite
+	}
+	if !sess.Can(reqAction) {
+		http.Error(w, "Forbidden", http.StatusForbidden)
+		return
+	}
+
 	inv, err := s.authCmd.CreateInvite(r.Context(), auth.CreateInviteCommand{
 		Username:  req.Username,
 		Label:     req.Label,
@@ -2420,6 +2536,10 @@ func (s *HTTPServer) handleAPISession(w http.ResponseWriter, r *http.Request) {
 	sess, err := s.extractSession(r)
 	if err != nil || sess == nil {
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+	if !sess.Can(auth.ActionAccountRead) {
+		http.Error(w, "Forbidden", http.StatusForbidden)
 		return
 	}
 	writeJSON(w, http.StatusOK, sess)
@@ -2506,6 +2626,11 @@ func (s *HTTPServer) handleAPITokensGet(
 	r *http.Request,
 	sess *auth.Session,
 ) {
+	if !sess.Can(auth.ActionTokensRead) {
+		http.Error(w, "Forbidden", http.StatusForbidden)
+		return
+	}
+
 	targetUser := sess.Username
 	if sess.Role == auth.RoleAdmin {
 		if qUser := r.URL.Query().Get("username"); qUser != "" {
@@ -2530,6 +2655,11 @@ func (s *HTTPServer) handleAPITokensPost(
 	r *http.Request,
 	sess *auth.Session,
 ) {
+	if !sess.Can(auth.ActionTokensWrite) {
+		http.Error(w, "Forbidden", http.StatusForbidden)
+		return
+	}
+
 	var req struct {
 		Name      string   `json:"name"`
 		Role      string   `json:"role"`
@@ -2596,6 +2726,11 @@ func (s *HTTPServer) handleAPITokensDelete(
 	r *http.Request,
 	sess *auth.Session,
 ) {
+	if !sess.Can(auth.ActionTokensWrite) {
+		http.Error(w, "Forbidden", http.StatusForbidden)
+		return
+	}
+
 	tokenID := r.URL.Query().Get("id")
 	if tokenID == "" {
 		http.Error(w, "Missing token id", http.StatusBadRequest)
@@ -2658,7 +2793,66 @@ func (s *HTTPServer) handleSettingsTokens(
 		return
 	}
 
+	if !sess.Can(auth.ActionTokensRead) {
+		http.Error(
+			w,
+			"Forbidden: Insufficient privileges",
+			http.StatusForbidden,
+		)
+		return
+	}
+
 	s.renderSettingsTokensView(w, r, sess, nil, "", "")
+}
+
+func parseScopes(raw string) []string {
+	var list []string
+	if raw != "" {
+		for _, s := range strings.Split(raw, ",") {
+			s = strings.TrimSpace(s)
+			if s != "" {
+				list = append(list, s)
+			}
+		}
+	}
+	if len(list) == 0 {
+		return []string{"*"}
+	}
+	return list
+}
+
+func (s *HTTPServer) requireTokensWrite(
+	w http.ResponseWriter,
+	r *http.Request,
+) (*auth.Session, bool) {
+	sess, err := s.extractSession(r)
+	if err != nil || sess == nil {
+		http.Redirect(
+			w,
+			r,
+			"/login?next=/settings/tokens",
+			http.StatusFound,
+		)
+		return nil, false
+	}
+	if sess.MustChangePassword {
+		http.Redirect(
+			w,
+			r,
+			"/settings/password?enforce=true",
+			http.StatusFound,
+		)
+		return nil, false
+	}
+	if !sess.Can(auth.ActionTokensWrite) {
+		http.Error(
+			w,
+			"Forbidden: Insufficient privileges",
+			http.StatusForbidden,
+		)
+		return nil, false
+	}
+	return sess, true
 }
 
 func (s *HTTPServer) handleSettingsTokensCreate(
@@ -2674,29 +2868,15 @@ func (s *HTTPServer) handleSettingsTokensCreate(
 		return
 	}
 
-	sess, err := s.extractSession(r)
-	if err != nil || sess == nil {
-		http.Redirect(
-			w,
-			r,
-			"/login?next=/settings/tokens",
-			http.StatusFound,
-		)
-		return
-	}
-	if sess.MustChangePassword {
-		http.Redirect(
-			w,
-			r,
-			"/settings/password?enforce=true",
-			http.StatusFound,
-		)
+	sess, ok := s.requireTokensWrite(w, r)
+	if !ok {
 		return
 	}
 
 	name := strings.TrimSpace(r.FormValue("name"))
 	roleStr := strings.TrimSpace(r.FormValue("role"))
 	expiresInStr := strings.TrimSpace(r.FormValue("expires_in"))
+	scopesList := parseScopes(r.FormValue("scopes"))
 
 	if name == "" {
 		s.renderSettingsTokensView(
@@ -2761,6 +2941,7 @@ func (s *HTTPServer) handleSettingsTokensCreate(
 			Name:      name,
 			Role:      role,
 			Username:  sess.Username,
+			Scopes:    scopesList,
 			ExpiresIn: expiresIn,
 		},
 	)
@@ -2792,23 +2973,8 @@ func (s *HTTPServer) handleSettingsTokensRevoke(
 		return
 	}
 
-	sess, err := s.extractSession(r)
-	if err != nil || sess == nil {
-		http.Redirect(
-			w,
-			r,
-			"/login?next=/settings/tokens",
-			http.StatusFound,
-		)
-		return
-	}
-	if sess.MustChangePassword {
-		http.Redirect(
-			w,
-			r,
-			"/settings/password?enforce=true",
-			http.StatusFound,
-		)
+	sess, ok := s.requireTokensWrite(w, r)
+	if !ok {
 		return
 	}
 

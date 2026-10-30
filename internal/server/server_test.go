@@ -5,6 +5,7 @@
 package server_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
@@ -2439,6 +2440,291 @@ func testAPIDualTransportTCPBearer(
 	if revokedResp.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("expected 401 for revoked token, got %d",
 			revokedResp.StatusCode)
+	}
+}
+
+func TestAuthAPI_TokenScopeEnforcement(t *testing.T) {
+	t.Parallel()
+	srv, baseURL, _, authStore := setupPasswordLifecycleServer(
+		t,
+		config.PasswordPolicyConfig{
+			RequireChangeOnFirstLogin: false,
+			MinLength:                 8,
+		},
+	)
+
+	opHash, err := auth.HashPassword("OperatorPass123!")
+	if err != nil {
+		t.Fatalf("hashing operator password: %v", err)
+	}
+	if err := authStore.CreateUser(
+		context.Background(),
+		&auth.User{
+			Username:           "opuser",
+			PasswordHash:       &opHash,
+			Role:               auth.RoleOperator,
+			IsActive:           true,
+			MustChangePassword: false,
+		},
+	); err != nil {
+		t.Fatalf("creating operator user: %v", err)
+	}
+
+	tcpClient := &http.Client{Timeout: 5 * time.Second}
+	sockPath := srv.SocketPath()
+	unixClient := &http.Client{
+		Transport: &http.Transport{
+			DialContext: func(
+				ctx context.Context,
+				_, _ string,
+			) (net.Conn, error) {
+				var d net.Dialer
+				return d.DialContext(ctx, "unix", sockPath)
+			},
+		},
+		Timeout: 5 * time.Second,
+	}
+
+	createToken := func(
+		user string,
+		role auth.Role,
+		scopes []string,
+	) string {
+		t.Helper()
+		payload, mErr := json.Marshal(map[string]any{
+			"name":       "scope-test-token",
+			"username":   user,
+			"role":       string(role),
+			"scopes":     scopes,
+			"expires_in": "720h",
+		})
+		if mErr != nil {
+			t.Fatalf("marshaling token create payload: %v", mErr)
+		}
+		req, cErr := http.NewRequestWithContext(
+			context.Background(),
+			http.MethodPost,
+			"http://unix/api/v1/tokens",
+			bytes.NewReader(payload),
+		)
+		if cErr != nil {
+			t.Fatalf("creating token request: %v", cErr)
+		}
+		req.Header.Set("Content-Type", "application/json")
+		resp, dErr := unixClient.Do(req)
+		if dErr != nil {
+			t.Fatalf("doing token create: %v", dErr)
+		}
+		defer closeBody(t, resp)
+		if resp.StatusCode != http.StatusCreated {
+			t.Fatalf("expected 201 Created, got %d", resp.StatusCode)
+		}
+		var res tokens.CreateTokenResult
+		if decErr := json.NewDecoder(resp.Body).Decode(&res); decErr != nil {
+			t.Fatalf("decoding token create result: %v", decErr)
+		}
+		return res.RawToken
+	}
+
+	// 1. Unix socket preserves administrative control
+	testScopeUnixAdminAccess(t, unixClient)
+
+	// 2. Token with tokens:read scope only
+	readOnlyTok := createToken(
+		"admin",
+		auth.RoleAdmin,
+		[]string{"tokens:read"},
+	)
+	testScopeTokensReadScope(t, tcpClient, baseURL, readOnlyTok)
+
+	// 3. Operator token with wildcard "*" (Effective = Role ∩ Scope)
+	opWildcardTok := createToken(
+		"opuser",
+		auth.RoleOperator,
+		[]string{"*"},
+	)
+	testScopeOperatorWildcard(t, tcpClient, baseURL, opWildcardTok)
+
+	// 4. Token with unrelated/invalid scopes fails closed
+	invalidScopeTok := createToken(
+		"admin",
+		auth.RoleAdmin,
+		[]string{"unknown:scope"},
+	)
+	testScopeInvalidScope(t, tcpClient, baseURL, invalidScopeTok)
+}
+
+func testScopeUnixAdminAccess(t *testing.T, client *http.Client) {
+	t.Helper()
+	req, cErr := http.NewRequestWithContext(
+		context.Background(),
+		http.MethodGet,
+		"http://unix/settings/users",
+		nil,
+	)
+	if cErr != nil {
+		t.Fatalf("creating unix request: %v", cErr)
+	}
+	resp, dErr := client.Do(req)
+	if dErr != nil {
+		t.Fatalf("doing unix request: %v", dErr)
+	}
+	defer closeBody(t, resp)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf(
+			"expected 200 for unix admin access, got %d",
+			resp.StatusCode,
+		)
+	}
+}
+
+func testScopeTokensReadScope(
+	t *testing.T,
+	client *http.Client,
+	baseURL string,
+	token string,
+) {
+	t.Helper()
+	// GET /api/v1/tokens -> 200 OK
+	req, cErr := http.NewRequestWithContext(
+		context.Background(),
+		http.MethodGet,
+		baseURL+"/api/v1/tokens",
+		nil,
+	)
+	if cErr != nil {
+		t.Fatalf("creating get tokens req: %v", cErr)
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, dErr := client.Do(req)
+	if dErr != nil {
+		t.Fatalf("doing get tokens req: %v", dErr)
+	}
+	defer closeBody(t, resp)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 for tokens:read GET, got %d", resp.StatusCode)
+	}
+
+	// POST /api/v1/tokens -> 403 Forbidden
+	pReq, cErr := http.NewRequestWithContext(
+		context.Background(),
+		http.MethodPost,
+		baseURL+"/api/v1/tokens",
+		strings.NewReader(`{"name":"forbidden"}`),
+	)
+	if cErr != nil {
+		t.Fatalf("creating post tokens req: %v", cErr)
+	}
+	pReq.Header.Set("Authorization", "Bearer "+token)
+	pReq.Header.Set("Content-Type", "application/json")
+	pResp, dErr := client.Do(pReq)
+	if dErr != nil {
+		t.Fatalf("doing post tokens req: %v", dErr)
+	}
+	defer closeBody(t, pResp)
+	if pResp.StatusCode != http.StatusForbidden {
+		t.Fatalf("expected 403 for tokens:read POST, got %d", pResp.StatusCode)
+	}
+
+	// GET /operator -> 403 Forbidden (missing system:read)
+	opReq, cErr := http.NewRequestWithContext(
+		context.Background(),
+		http.MethodGet,
+		baseURL+"/operator",
+		nil,
+	)
+	if cErr != nil {
+		t.Fatalf("creating operator req: %v", cErr)
+	}
+	opReq.Header.Set("Authorization", "Bearer "+token)
+	opResp, dErr := client.Do(opReq)
+	if dErr != nil {
+		t.Fatalf("doing operator req: %v", dErr)
+	}
+	defer closeBody(t, opResp)
+	if opResp.StatusCode != http.StatusForbidden {
+		t.Fatalf("expected 403 for tokens:read /operator, got %d", opResp.StatusCode)
+	}
+}
+
+func testScopeOperatorWildcard(
+	t *testing.T,
+	client *http.Client,
+	baseURL string,
+	token string,
+) {
+	t.Helper()
+	// GET /api/v1/tokens -> 200 OK (operator has tokens:read)
+	req, cErr := http.NewRequestWithContext(
+		context.Background(),
+		http.MethodGet,
+		baseURL+"/api/v1/tokens",
+		nil,
+	)
+	if cErr != nil {
+		t.Fatalf("creating req: %v", cErr)
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, dErr := client.Do(req)
+	if dErr != nil {
+		t.Fatalf("doing req: %v", dErr)
+	}
+	defer closeBody(t, resp)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 for operator token, got %d", resp.StatusCode)
+	}
+
+	// GET /settings/users -> 403 Forbidden (operator lacks users:read)
+	uReq, cErr := http.NewRequestWithContext(
+		context.Background(),
+		http.MethodGet,
+		baseURL+"/settings/users",
+		nil,
+	)
+	if cErr != nil {
+		t.Fatalf("creating users req: %v", cErr)
+	}
+	uReq.Header.Set("Authorization", "Bearer "+token)
+	uResp, dErr := client.Do(uReq)
+	if dErr != nil {
+		t.Fatalf("doing users req: %v", dErr)
+	}
+	defer closeBody(t, uResp)
+	if uResp.StatusCode != http.StatusForbidden {
+		t.Fatalf(
+			"expected 403 for operator on /settings/users, got %d",
+			uResp.StatusCode,
+		)
+	}
+}
+
+func testScopeInvalidScope(
+	t *testing.T,
+	client *http.Client,
+	baseURL string,
+	token string,
+) {
+	t.Helper()
+	req, cErr := http.NewRequestWithContext(
+		context.Background(),
+		http.MethodGet,
+		baseURL+"/api/v1/tokens",
+		nil,
+	)
+	if cErr != nil {
+		t.Fatalf("creating req: %v", cErr)
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, dErr := client.Do(req)
+	if dErr != nil {
+		t.Fatalf("doing req: %v", dErr)
+	}
+	defer closeBody(t, resp)
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf(
+			"expected 403 for invalid scope token, got %d",
+			resp.StatusCode,
+		)
 	}
 }
 

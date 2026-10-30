@@ -16,97 +16,6 @@ Do **not** respond to these issues with a broad rewrite, an ORM, or a generic SQ
 
 ## Prioritized recommendations
 
-### P0 — Remove SQL implementation leakage from storage ports
-
-**Observed:** `internal/storage/ports.go` exposes `DB() *sql.DB` on the Engine abstraction and accepts `func(tx *sql.Tx) error` in its transaction abstraction.
-
-**Why it matters:** Callers that can obtain `*sql.DB` or `*sql.Tx` are coupled to Go's SQL implementation and the current relational adapter. This weakens the port, makes alternate implementations awkward, and encourages application code to issue infrastructure-level SQL.
-
-**Recommendation:**
-
-- Remove `DB() *sql.DB` from the application-facing Engine contract.
-- Replace the raw-`*sql.Tx` callback with a small, database-independent unit-of-work/transaction port, or narrower operation-specific ports if a general transaction abstraction is not actually needed.
-- Keep SQL-specific transaction creation and commit/rollback behavior inside the SQLite adapter.
-- Make the composition root pass feature adapters their required ports, not a raw database handle.
-- Avoid exposing a universal query/exec interface as a disguised generic repository; define only the operations the application needs.
-
-**Acceptance criteria:**
-
-- Application/domain packages do not import `database/sql` solely to reach infrastructure.
-- Auth/token services cannot access the raw SQLite connection.
-- Transaction semantics are documented and tested, including rollback on failure.
-- Existing behavior remains covered by tests.
-
-### P1 — Keep persistence adapters in infrastructure; keep ports with their consumers
-
-**Observed:** Auth and tokens own useful persistence interfaces in their `ports.go` files, but their SQLite implementations currently live alongside application code in `internal/auth/adapter_sqlite.go` and `internal/tokens/adapter_sqlite.go`.
-
-**Recommendation:**
-
-- Keep `DeviceStore`, `SessionStore`, `ChallengeStore`, `InviteStore`, `UserStore`, and token-store interfaces owned by their respective feature packages.
-- Move concrete SQLite implementations into an infrastructure location, for example `internal/storage/sqlite/auth_store.go` and `internal/storage/sqlite/token_store.go`.
-- Keep constructors and SQL schema details in the adapter package.
-- Let the composition root import concrete infrastructure packages and inject implementations through feature-owned interfaces.
-
-This is a boundary improvement, not a reason to reorganize every package at once. It can follow the port cleanup or be done as a separate mechanical change with tests.
-
-### P1 — Make HTTP server dependencies explicit
-
-**Observed:** `internal/server/adapter_http.go` accepts an optional variadic token service. If none is supplied, it constructs a SQLite token store/service using `engine.DB()`. It also creates a storage QueryService when one is not provided.
-
-**Why it matters:** An inbound adapter should translate transport requests into application calls. It should not decide which database adapter to use or silently construct application services. Optional fallback wiring can also hide a missing dependency until runtime.
-
-**Recommendation:**
-
-- Require the token service and other required collaborators explicitly.
-- Prefer a named dependency/config struct if the constructor has several dependencies.
-- Keep all concrete adapter selection and service construction in the composition root.
-- Retain defaults only for genuinely optional presentation/transport configuration, not core infrastructure.
-
-**Acceptance criteria:** Constructing the HTTP server does not instantiate SQLite stores or choose persistence implementations.
-
-### P1 — Enforce the user-exists invariant when creating tokens
-
-**Observed:** The SQLite token adapter's `CreateToken()` path performs an `INSERT INTO users ... ON CONFLICT DO NOTHING` (`ensureUser`) to satisfy the token table's foreign key. This can create a partial user row as a side effect of token creation.
-
-**Why it matters:** Token creation should not silently manufacture an incomplete user aggregate/record. The user identity lifecycle belongs to the appropriate user/auth workflow.
-
-**Recommendation:**
-
-- Remove the implicit user creation from token persistence.
-- Ensure the application service validates that the referenced user exists through an appropriate port, or rely on a well-defined application workflow that guarantees it.
-- Keep the database foreign key as the final integrity guard.
-- Return a meaningful not-found/invariant error when the user does not exist.
-
-**Acceptance criteria:** Attempting to create a token for an unknown user fails and leaves no user or token row behind.
-
-### P1 — Make first-time setup atomic and safe across processes
-
-**Observed:** `internal/auth/commands.go` uses an in-process `sync.Mutex` around initial setup. That coordinates callers using that one service instance only.
-
-**Why it matters:** If multiple daemon processes or manager instances share the database, an in-memory mutex cannot enforce a global one-time setup invariant. Setup may also involve multiple persistence writes (for example, initial admin and session creation).
-
-**Recommendation:**
-
-- Define the exact invariant: e.g. only one initial administrator may be established for a fresh installation.
-- Enforce it at the database/application transaction boundary, not only with a process-local mutex.
-- Make the relevant writes atomic.
-- Add concurrency tests using separate service instances/connections against the same database.
-- Keep the mutex only if it still helps reduce local contention; do not treat it as the correctness mechanism.
-
-### P1 — Review SQLite migration concurrency
-
-**Observed:** The migration runner reads applied migration versions and then applies pending migrations in transactions. If multiple processes start concurrently against the same database, both may observe the same migration as pending.
-
-**Recommendation:**
-
-- Re-read/validate migration state while holding an appropriate database-level lock or serialize migration execution.
-- Ensure the migration record and schema changes commit atomically.
-- Handle duplicate/racing migration attempts deterministically.
-- Add a test that starts migration concurrently from independent connections/process-like adapter instances.
-
-Do this before relying on multiple manager/worker processes starting against the same SQLite database.
-
 ### P2 — Decouple SQLite adapter configuration from application config
 
 **Observed:** `storage.NewSQLiteAdapter(ctx, cfg config.StorageConfig)` imports and accepts `internal/config` types, and the adapter uses an application-config default database path.
@@ -147,17 +56,28 @@ The web UI and CLI are therefore two inbound clients of a shared management API/
 
 ## Suggested implementation sequence
 
-1. **Storage port boundary:** remove `DB()` and raw `*sql.Tx` from application-facing interfaces; add tests.
-2. **Auth adapter boundary:** move auth SQLite implementation behind infrastructure while preserving auth-owned ports.
-3. **Token adapter boundary:** do the same for tokens and remove implicit user creation.
-4. **HTTP composition:** make server dependencies explicit and remove infrastructure fallback construction.
-5. **Transaction semantics:** introduce only the smallest database-independent transaction/unit-of-work abstraction required by real use cases.
-6. **Setup invariant:** make first-time initialization atomic across service instances/processes.
-7. **Migration safety:** serialize/guard migration execution and test concurrent startup.
-8. **Config boundary:** decouple SQLite options from application config.
-9. **Management API contract:** document the shared API used by the web UI and `cruciblectl`, including remote and Unix-socket transports; add contract tests.
-10. **Documentation alignment:** update README, PLAN, examples, deployment docs, and CLI help to describe the multi-binary model.
-11. **PostgreSQL adapter**, then **MySQL adapter**, each with integration and behavioral contract tests.
+1. [x] **Storage port boundary:** remove `DB()` and raw `*sql.Tx` from
+   application-facing interfaces; add tests.
+2. [x] **Auth adapter boundary:** move auth SQLite implementation behind
+   infrastructure while preserving auth-owned ports.
+3. [x] **Token adapter boundary:** do the same for tokens and remove
+   implicit user creation.
+4. [x] **HTTP composition:** make server dependencies explicit and remove
+   infrastructure fallback construction.
+5. [x] **Transaction semantics:** introduce only the smallest database-
+   independent transaction/unit-of-work abstraction required by real use cases.
+6. [x] **Setup invariant:** make first-time initialization atomic across
+   service instances/processes.
+7. [x] **Migration safety:** serialize/guard migration execution and test
+   concurrent startup.
+8. [ ] **Config boundary:** decouple SQLite options from application config.
+9. [x] **Management API contract:** document the shared API used by the web UI
+   and `cruciblectl`, including remote and Unix-socket transports; add contract
+   tests.
+10. [x] **Documentation alignment:** update README, PLAN, examples, deployment
+    docs, and CLI help to describe the multi-binary model.
+11. [ ] **PostgreSQL adapter**, then **MySQL adapter**, each with integration
+    and behavioral contract tests.
 
 Steps 2–5 may need slight reordering depending on the transaction API discovered during step 1. Keep each PR focused and independently reviewable.
 

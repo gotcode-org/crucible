@@ -41,6 +41,7 @@ func tokenCreateCmd() *cobra.Command {
 		role       string
 		expiresIn  string
 		user       string
+		scopes     []string
 		socketPath string
 		serverURL  string
 		token      string
@@ -81,6 +82,7 @@ func tokenCreateCmd() *cobra.Command {
 				"role":       role,
 				"expires_in": expiresIn,
 				"username":   user,
+				"scopes":     scopes,
 			})
 			if mErr != nil {
 				return fmt.Errorf("encoding payload: %w", mErr)
@@ -154,6 +156,12 @@ func tokenCreateCmd() *cobra.Command {
 		"u",
 		"",
 		"Target operator username (admin only; defaults to self)",
+	)
+	cmd.Flags().StringSliceVar(
+		&scopes,
+		"scopes",
+		[]string{"*"},
+		"Token permission scopes (e.g. tokens:read,system:read or *)",
 	)
 	cmd.Flags().StringVar(
 		&socketPath,
@@ -443,6 +451,17 @@ func printCreateTokenResult(
 		out,
 		"  Owner:       %s\n",
 		res.Token.Username,
+	); err != nil {
+		return err
+	}
+	scopesStr := strings.Join(res.Token.Scopes, ", ")
+	if scopesStr == "" {
+		scopesStr = "*"
+	}
+	if _, err := fmt.Fprintf(
+		out,
+		"  Scopes:      %s\n",
+		scopesStr,
 	); err != nil {
 		return err
 	}

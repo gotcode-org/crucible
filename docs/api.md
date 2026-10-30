@@ -31,41 +31,40 @@ Crucible exposes a RESTful JSON API alongside its embedded web console:
    - Supports Personal Access Tokens (`cb_pat_...`) hashed with SHA-256
      at rest, with role metadata and expiration/usage telemetry.
 
-### Authorization contract status
+### Shared Authorization & Scope Enforcement
 
-This section records current behavior and a proposed contract for owner
-decision. The proposal does not change authorization behavior by itself.
+Crucible implements a centralized authorization policy enforcing transport
+parity across all requests:
 
-- **User roles** are currently used by handler-level checks to permit or deny
-  operations. The role set and per-operation permission matrix are not yet
-  specified here as a complete stable contract.
-- **PAT scopes** are stored and returned as token metadata. They are not
-  currently checked when authorizing requests; a PAT currently supplies its
-  associated username and role to the existing role checks. Scope restrictions
-  must not be assumed to work until enforcement is implemented.
-- **Transport authorization** currently authenticates remote TCP requests by
-  session or PAT. Requests accepted through the protected Unix socket are
-  mapped to the local-admin session described above. Both transports reach the
-  same handlers, but a complete shared authorization contract and parity tests
-  remain open.
-
-#### Proposed contract for owner review
-
-Keep three decisions distinct in the authorization model:
-
-1. A user's role defines the operations available to that user.
-2. A PAT's scopes define the subset of those operations available through that
-   particular credential. A token must never gain authority beyond its user.
-3. Transport authentication establishes a principal; it must not create a
-   second set of operation rules. The trusted local socket principal remains
-   the owner-approved local-admin identity, while remote requests use their
-   authenticated user identity.
-
-The following details require owner decisions before implementation: scope
-names and granularity, how scopes map to each existing endpoint, whether token
-creation validates requested scopes, and how the local-admin principal and
-browser sessions are represented in the common authorization checks. No new
-scope vocabulary or compatibility promise is established by this proposal.
+- **Formula**:
+  `Effective Permissions = User Role Permissions ∩ PAT Scope Permissions`
+- **Role Boundary**: A user's role defines the ceiling of operations available
+  to that user (e.g. `admin`, `operator`, `maintainer`, `viewer`).
+- **Scope Restriction**: A Personal Access Token's scopes define the subset of
+  those operations available through that credential. A token can never
+  escalate privileges beyond its owner's role.
+- **Transports**:
+  - **Local UNIX Domain Socket (`/run/crucibled/crucible.sock`)**:
+    Authenticated as the trusted local operator principal (`auth.RoleAdmin`,
+    `CredentialUnixSocket`), retaining administrative capabilities without
+    PAT or interactive login.
+  - **Browser Sessions**: Interactive cookie or bearer sessions inherit full
+    role permissions (`CredentialSession`).
+  - **Remote TCP PAT**: Requests carrying `Authorization: Bearer <token>`
+    (`CredentialToken`) are evaluated against the intersection of the owner's
+    role permissions and the token's granted scopes.
+- **Scope Vocabulary**:
+  - `*`: Full wildcard (all permissions permitted by the user's role).
+  - `<resource>:*`: Resource prefix wildcard (e.g. `tokens:*`).
+  - `<resource>:<action>`: Discrete action permissions:
+    - `tokens:read`, `tokens:write`
+    - `users:read`, `users:write`
+    - `account:read`, `account:write`
+    - `system:read`, `system:admin`
+- **Status Codes**:
+  - `401 Unauthorized`: Missing, unparseable, expired, or revoked credential.
+  - `403 Forbidden`: Authenticated principal lacks required role permission or
+    token scope.
 
 ---
 
@@ -401,10 +400,18 @@ Generates and persists a new Personal Access Token. The plaintext token
 {
   "name": "ci-deployer",
   "role": "operator",
+  "scopes": ["tokens:read", "system:read"],
   "expires_in": "720h",
   "username": "alice"
 }
 ```
+  - `name` (string, required): Human-readable token name.
+  - `role` (string, optional): Access role (`admin`, `operator`, `viewer`).
+  - `scopes` (array of string, optional): Permission scopes (defaults to
+    `["*"]`).
+  - `expires_in` (string, optional): Lifetime duration (e.g. `720h`, `30d`,
+    `0`).
+  - `username` (string, optional, admin-only): Target owner username.
 - **Responses**:
   - `201 Created`:
     ```json

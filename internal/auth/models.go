@@ -109,12 +109,40 @@ type TOTPInvite struct {
 
 // Session represents an active authenticated user session.
 type Session struct {
-	ID                 string    `json:"id"`
-	Username           string    `json:"username"`
-	Role               Role      `json:"role"`
-	MustChangePassword bool      `json:"must_change_password"`
-	CreatedAt          time.Time `json:"created_at"`
-	ExpiresAt          time.Time `json:"expires_at"`
+	ID                 string         `json:"id"`
+	Username           string         `json:"username"`
+	Role               Role           `json:"role"`
+	MustChangePassword bool           `json:"must_change_password"`
+	CreatedAt          time.Time      `json:"created_at"`
+	ExpiresAt          time.Time      `json:"expires_at"`
+	Scopes             []string       `json:"scopes,omitempty"`
+	CredentialKind     CredentialKind `json:"credential_kind,omitempty"`
+}
+
+// Principal returns the authorization Principal associated with this session.
+func (s *Session) Principal() *Principal {
+	if s == nil {
+		return nil
+	}
+	kind := s.CredentialKind
+	if kind == "" {
+		kind = CredentialSession
+	}
+	return &Principal{
+		ID:             s.ID,
+		Username:       s.Username,
+		Role:           s.Role,
+		CredentialKind: kind,
+		Scopes:         s.Scopes,
+	}
+}
+
+// Can reports whether the session principal is authorized to perform action.
+func (s *Session) Can(action Action) bool {
+	if s == nil {
+		return false
+	}
+	return s.Principal().Can(action)
 }
 
 // Challenge represents an ephemeral 5-minute pre-auth challenge token
