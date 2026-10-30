@@ -9,6 +9,7 @@ import (
 	"errors"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -391,6 +392,7 @@ func setupTestCQRS() (*auth.CommandService, *auth.QueryService) {
 		memStore,
 		memStore,
 		memStore,
+		memStore,
 		crypter,
 		false,
 	)
@@ -411,6 +413,7 @@ func TestCQRS_RestrictToGroups(t *testing.T) {
 
 	cmdSvc := auth.NewCommandService(
 		memAuth,
+		memStore,
 		memStore,
 		memStore,
 		memStore,
@@ -622,6 +625,7 @@ func TestPasswordLifecycleAndAdminUserManagement(t *testing.T) {
 		store,
 		store,
 		store,
+		store,
 		crypter,
 		false,
 	)
@@ -715,6 +719,7 @@ func setupInitialTestServices(
 	}
 	cmdSvc := auth.NewCommandService(
 		authenticator,
+		store,
 		store,
 		store,
 		store,
@@ -822,5 +827,88 @@ func TestInitialSetup_SingleRunBarrier(t *testing.T) {
 	}
 	if u.Role != auth.RoleAdmin {
 		t.Errorf("expected active admin user, got: %+v", u)
+	}
+}
+
+func TestInitialSetup_ConcurrentServiceInstances(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	adapter1 := setupTestDB(t)
+	adapter2, err := storage.NewSQLiteAdapterPath(
+		ctx,
+		adapter1.Path(),
+		false,
+		5000,
+	)
+	if err != nil {
+		t.Fatalf("opening second adapter for shared database: %v", err)
+	}
+	t.Cleanup(func() {
+		if closeErr := adapter2.Close(); closeErr != nil {
+			t.Errorf("closing second adapter: %v", closeErr)
+		}
+	})
+
+	newService := func(adapter *storage.SQLiteAdapter) *auth.CommandService {
+		store := storage.NewSQLiteAuthStore(adapter)
+		return auth.NewCommandService(
+			auth.NewSQLiteAuthenticator(store),
+			store,
+			store,
+			store,
+			store,
+			store,
+			store,
+			auth.NewPlaintextCrypter(),
+			false,
+		)
+	}
+	services := []*auth.CommandService{newService(adapter1), newService(adapter2)}
+	start := make(chan struct{})
+	errs := make([]error, len(services))
+	sessions := make([]*auth.Session, len(services))
+	usernames := []string{"admin-a", "admin-b"}
+	var wg sync.WaitGroup
+	for i, service := range services {
+		wg.Add(1)
+		go func(i int, service *auth.CommandService) {
+			defer wg.Done()
+			<-start
+			sessions[i], errs[i] = service.InitialSetup(ctx, auth.InitialSetupCommand{
+				Username:        usernames[i],
+				Password:        "SecureSetupPassword123!",
+				ConfirmPassword: "SecureSetupPassword123!",
+			})
+		}(i, service)
+	}
+	close(start)
+	wg.Wait()
+
+	successes := 0
+	completed := 0
+	for i, setupErr := range errs {
+		if setupErr == nil {
+			successes++
+			if sessions[i] == nil {
+				t.Errorf("successful setup %d returned no session", i)
+			} else if _, lookupErr := storage.NewSQLiteAuthStore(adapter1).
+				GetSession(ctx, sessions[i].ID); lookupErr != nil {
+				t.Errorf("session from successful setup %d was not persisted: %v", i, lookupErr)
+			}
+		} else if errors.Is(setupErr, auth.ErrSetupCompleted) {
+			completed++
+		} else {
+			t.Errorf("setup %d failed unexpectedly: %v", i, setupErr)
+		}
+	}
+	if successes != 1 || completed != 1 {
+		t.Fatalf("got %d successful and %d completed setups; want one each", successes, completed)
+	}
+	users, err := storage.NewSQLiteAuthStore(adapter1).ListUsers(ctx)
+	if err != nil {
+		t.Fatalf("listing provisioned users: %v", err)
+	}
+	if len(users) != 1 || users[0].Role != auth.RoleAdmin {
+		t.Fatalf("got users after concurrent setup: %+v", users)
 	}
 }

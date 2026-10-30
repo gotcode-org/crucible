@@ -1,10 +1,10 @@
 # Crucible — Architecture Review Recommendations
 
 > Read-only review of production repository `gotcode-org/crucible`.
-> Review baseline: `832bad8b9c82e5f2768143e2cb4f32247ab6dd1a` (reported as the 2026-10-29 main-branch head).
+> Original review baseline: `832bad8b9c82e5f2768143e2cb4f32247ab6dd1a` (reported as the 2026-10-29 main-branch head).
 > Prepared: 2026-10-30
 >
-> These are recommendations, not a statement that changes have already been made. Re-check the current code before implementing; the repository may have advanced.
+> Findings below describe the original review baseline, not necessarily the current source. Use the revalidation table at the end for current status. Recommendations are not implementation authorization; re-check source before acting.
 
 ## Executive summary
 
@@ -329,48 +329,54 @@ current code before implementation; runtime guarantees require tests.
 
 ## Current Checkout Revalidation
 
-Revalidated against `2739c81683db140900aac247c19c9c14ad6644da` on
-2026-10-30. The storage-boundary follow-up is implemented in the working tree;
-affected package tests and the build pass. Full project checks remain before
-commit.
+Revalidated against the current local checkout on 2026-10-30: branch
+`repair/storage-boundary-hardening`, with a local follow-up commit on top of
+`upstream/main` `854b304cdac232363c6f556e6562cbc8cbf48871`; the working tree is
+clean. This is a source review of the local checkout; it does not establish the
+state of any other private-server or mirror checkout. The original review
+baseline above is historical.
 
 Status meanings: **Confirmed** means the described condition exists in source;
 **Partial** means the capability exists but the stated contract is incomplete
 or contradicted; **Planned** means it is not implemented and is already
 roadmapped; **Open** means the recommendation needs a product decision before
-implementation; **Resolved in working tree** means a change addresses the
-finding but is not yet committed; **Deferred** means no current defect or
-implementation task is warranted.
+implementation; **Implemented in HEAD** means the change is in the current
+commit; **Implemented in working tree** means a local uncommitted change
+addresses the finding; **Deferred** means no current defect or implementation
+task is warranted.
 
 | Finding | Status | Current evidence and disposition |
 |---|---|---|
-| Storage ports expose `*sql.DB` and `*sql.Tx` | Resolved in working tree | `Engine` no longer exposes `DB`; the SQLite adapter no longer exports `DB()` or `WithinTransaction`. Store constructors receive `*SQLiteAdapter` and use its private connection inside `internal/storage`. Commit and rollback behavior remains tested in that package, and a boundary test checks the exported method set. |
-| Auth/token SQLite adapters sit in feature packages | Resolved in working tree | Concrete stores now live in `internal/storage`; auth and token persistence ports remain feature-owned. Constructors accept the concrete SQLite adapter. |
-| HTTP adapter constructs fallback application/infrastructure services | Resolved in working tree | `NewServer` accepts a named `Dependencies` struct and creates no services. Engine, storage query, and token services are required; auth services are required when authentication is configured. The daemon composition root builds and injects them. |
-| Token persistence creates missing users | Resolved in working tree | Token creation checks the user-lookup port before persistence; the SQLite token store no longer creates placeholder users. A test verifies the unknown user and token remain absent after rejection. |
-| First-admin setup is safe across processes and atomic | Confirmed gap | `InitialSetup` uses `setupMu`, checks `CountUsers`, then separately calls `CreateUser` and `CreateSession`. The mutex is instance-local; the inspected setup tests cover validation/single invocation, not concurrent service instances or transaction failure. |
+| Storage ports expose `*sql.DB` and `*sql.Tx` | Implemented in HEAD | `Engine` no longer exposes `DB`; the SQLite adapter no longer exports `DB()` or `WithinTransaction`. Store constructors receive `*SQLiteAdapter`; a boundary test checks the exported method set. |
+| Auth/token SQLite adapters sit in feature packages | Implemented in HEAD | Concrete stores now live in `internal/storage`; auth and token persistence ports remain feature-owned. |
+| HTTP adapter constructs fallback application/infrastructure services | Implemented in HEAD | `NewServer` accepts named dependencies and constructs no services; daemon composition wires the concrete collaborators. |
+| Token persistence creates missing users | Implemented in HEAD | Token creation checks the user-lookup port before persistence; the SQLite token store no longer creates placeholder users. |
+| Connection-local SQLite pragmas apply to every pooled connection | Implemented in HEAD | The DSN initializes foreign keys, busy timeout, synchronous mode, temporary storage, and cache size for each connection. Tests inspect two simultaneous connections in file-backed and shared in-memory configurations; WAL is checked separately. |
+| First-admin setup is safe across processes and atomic | Implemented in HEAD | `InitialSetup` delegates to a storage port that conditionally inserts the first user and inserts the session in one SQLite transaction. Added separate-service/adapter concurrency and rollback tests. |
 | SQLite migration startup is serialized across connections | Confirmed gap | `migrateFS` reads applied versions once before its loop; each migration is separately transactional but there is no migration-wide lock or in-transaction recheck. Inspected storage tests cover normal migration and transaction rollback, not concurrent migration startup. |
 | SQLite adapter depends on application configuration | Confirmed | `internal/storage/adapter_sqlite.go` accepts `config.StorageConfig` and imports `internal/config`; its fallback path also comes from config. Translate config at the composition root if the adapter boundary is changed. |
 | Shared management API for web and CLI across both transports | Partial | Separate binaries, transport discovery, `/api/v1` routes, and `docs/api.md` exist. The API documentation is not a complete shared contract for stable errors, authorization and scope parity, request limits, or streaming lifecycle. No runner/log-stream implementation exists yet. |
 | Local Unix socket grants local administrator access | Intentional by owner decision | The owner clarified that admins with SSH/local CLI access are trusted to manage the server through the protected socket without PAT/login. `internal/server/adapter_http.go:extractSession` implements this through a `local-operator` admin session, matching the intended behavior. This is not a finding. Keep socket ownership/mode restrictive and document/test the trust boundary. |
 | PostgreSQL/MySQL adapters and generic dialect layer | Deferred | No such adapters or dialect package exist. The future adapter roadmap remains conditional on stable persistence contracts; do not implement the generic layer before a demonstrated need. |
 | Job and execution-attempt lifecycle | Planned / incomplete | The initial schema has `runs` and `job_events`, but there is no execution, scheduling, or reports feature package in this checkout and no attempt entity. Define lifecycle and recovery contracts before runner implementation; do not treat the roadmap prose as implemented behavior. |
-| Manager/worker protocol and failure model | Planned / incomplete; design open | There is no cluster package or proto source in this checkout. Existing plan prose describes worker behavior, while Phase 3 promises “exactly-once” scheduled execution. Reconcile that guarantee with the at-least-once/idempotent recommendation and explicit failure assumptions before implementing distributed coordination. |
+| Manager/worker protocol and failure model | Planned / incomplete; design open | There is no cluster package or proto source in this checkout. PLAN.md and docs/ROADMAP.md require explicit delivery semantics and disclaim exactly-once external side effects. The stale exactly-once claim in the initial schema comment is corrected in the current commit. |
 | Authentication, authorization, and worker identity separation | Partial | Local users, roles, sessions, and PATs exist. The Unix socket intentionally maps authorized local administrators to a local-admin principal; remote clients use their authenticated identities. Worker identity and a complete permission matrix for future RPC operations remain to be designed. |
 | Logs/reports as attempt-linked protected artifacts | Planned / incomplete | The schema contains run visibility and report-view-token tables, but there is no reports/engine implementation in this checkout. Retention, partial output, disk exhaustion, and attempt-level access behavior remain to be specified before implementation. |
 | API errors, limits, versioning, and contract tests | Partial; request-size issue confirmed | `docs/api.md` documents `/api/v1` endpoints and status codes, but handlers use ad hoc `http.Error` responses; inspected JSON decoders read request bodies without `http.MaxBytesReader`. Bound inbound bodies to prevent oversized requests. No shared API contract test suite or streaming contract exists. |
 | SLO roadmap claim | Incorrect in the reviewed baseline | The recommendation text says SLOs are already in PLAN/TODO, but neither file contained SLO work at `832bad8`. SLO definition is now tracked for Phase 5 production readiness; numeric targets remain unchosen pending workload baselines. |
 | Audit ledger | Planned / incomplete | Migration `003_audit_ledger.sql` creates the table and anti-tamper triggers; `internal/audit` recorder/store code is absent and TODO Milestone 1-09 is open. Treat hash-chain recording, atomicity, tamper verification, and failure behavior as acceptance criteria for that existing milestone. |
-| HA and distributed coordination failure handling | Planned / open | No cluster implementation exists. The plan's exactly-once promise is stronger than the evidence or failure model currently provided. Keep this as an owner decision before Phase 3; do not silently weaken or preserve the guarantee in implementation. |
+| HA and distributed coordination failure handling | Planned / open | No cluster implementation exists. PLAN.md and docs/ROADMAP.md now reject an unqualified exactly-once guarantee; consistency, quorum, fencing, and recovery assumptions still need design before Phase 3 implementation. |
 | Reusable architectural contract tests | Partial | Feature and CLI unit tests exist, including token concurrency and transaction rollback. The inspected suite has no cross-adapter behavioral contracts, setup/migration multi-connection race tests, or manager/worker protocol contracts. Add these alongside the corresponding implementations. |
 
 ### Review notes
 
-- The local branch and HEAD were inspected; HEAD matches the review baseline.
-- Relevant implementation and test files were read. The affected package tests
-  and build were run; full project checks remain to be rerun.
+- The local branch, HEAD, and clean working tree were inspected; the original
+  review baseline is historical and does not match the current checkout.
+- The focused storage/auth tests and server/daemon tests passed for the current
+  changes. `make check`, `golangci-lint run ./...`, and `make build` passed for
+  the current working tree.
 - The owner clarified that the socket's local-admin trust boundary is
   intentional. `PLAN.md` and `docs/api.md` now document it; no code correction
   is needed for this behavior.
-- Resolved statuses above describe working-tree changes and are not committed
-  until the full project checks pass and the changes are reviewed.
+- The HTTP request-size issue and migration concurrency issue remain open and
+  are already tracked in the current Phase 1 milestone.

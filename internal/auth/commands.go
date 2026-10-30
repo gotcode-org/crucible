@@ -36,6 +36,7 @@ type CommandService struct {
 	challengeStore   ChallengeStore
 	inviteStore      InviteStore
 	userStore        UserStore
+	setupStore       InitialSetupStore
 	crypter          SecretCrypter
 	restrictToGroups bool
 	setupMu          sync.Mutex
@@ -50,6 +51,7 @@ func NewCommandService(
 	challengeStore ChallengeStore,
 	inviteStore InviteStore,
 	userStore UserStore,
+	setupStore InitialSetupStore,
 	crypter SecretCrypter,
 	restrictToGroups bool,
 ) *CommandService {
@@ -60,6 +62,7 @@ func NewCommandService(
 		challengeStore:   challengeStore,
 		inviteStore:      inviteStore,
 		userStore:        userStore,
+		setupStore:       setupStore,
 		crypter:          crypter,
 		restrictToGroups: restrictToGroups,
 	}
@@ -618,20 +621,21 @@ func (s *CommandService) AdminDeleteUser(
 }
 
 // InitialSetup provisions the initial administrator account during first boot.
-// It enforces a strict single-run barrier: if any users already exist in
-// the user store, it immediately aborts with ErrSetupCompleted.
+// It enforces a strict single-run barrier in the persistence transaction: if
+// any user already exists, or another process wins the setup race, it aborts
+// with ErrSetupCompleted. The store atomically writes the user and session.
 func (s *CommandService) InitialSetup(
 	ctx context.Context,
 	cmd InitialSetupCommand,
 ) (*Session, error) {
-	if s.userStore == nil {
-		return nil, errors.New("user store unconfigured")
+	if s.userStore == nil || s.setupStore == nil {
+		return nil, errors.New("initial setup store unconfigured")
 	}
 
 	s.setupMu.Lock()
 	defer s.setupMu.Unlock()
 
-	// 1. Strict single-run guard
+	// Fast path only; the store repeats this invariant atomically with writes.
 	count, err := s.userStore.CountUsers(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("checking user count: %w", err)
@@ -681,11 +685,8 @@ func (s *CommandService) InitialSetup(
 		CreatedAt:          now,
 	}
 
-	if cErr := s.userStore.CreateUser(ctx, u); cErr != nil {
-		return nil, cErr
-	}
-
-	// 5. Create active administrator session
+	// Create the first user and session together. The store performs the
+	// authoritative no-existing-users check inside the same transaction.
 	sess := &Session{
 		ID:                 id.NewSessionID(),
 		Username:           username,
@@ -694,8 +695,8 @@ func (s *CommandService) InitialSetup(
 		CreatedAt:          now,
 		ExpiresAt:          now.Add(SessionTTL),
 	}
-	if sErr := s.sessionStore.CreateSession(ctx, sess); sErr != nil {
-		return nil, fmt.Errorf("creating admin session: %w", sErr)
+	if err := s.setupStore.ProvisionInitialAdmin(ctx, u, sess); err != nil {
+		return nil, err
 	}
 
 	return sess, nil

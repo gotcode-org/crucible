@@ -3096,7 +3096,11 @@ database adapters or a generic SQL dialect/repository framework.
    create an incomplete user record. Make first-admin setup atomic across
    independent service instances sharing SQLite. Serialize or safely resolve
    concurrent migration attempts. Add rollback and independent-connection
-   concurrency tests for applicable behavior.
+   concurrency tests for applicable behavior. Initialize every connection-local
+   SQLite pragma at connection creation, and verify foreign keys, busy timeout,
+   synchronous mode, temp storage, and cache size on separate pooled
+   connections. Verify WAL mode separately as a database-level setting; keep
+   in-memory database semantics consistent across pooled connections.
 4. **SQLite configuration boundary:** Pass SQLite-specific options to the
    adapter, with application configuration translated at the composition
    root. Add no unused adapter knobs.

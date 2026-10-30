@@ -82,6 +82,16 @@ type UserStore interface {
 	TouchUserLogin(ctx context.Context, username string, at time.Time) error
 }
 
+// InitialSetupStore atomically provisions the first administrator and its
+// initial session, rejecting the operation if any user already exists.
+type InitialSetupStore interface {
+	ProvisionInitialAdmin(
+		ctx context.Context,
+		user *User,
+		session *Session,
+	) error
+}
+
 // SecretCrypter defines the outbound port for encrypting and decrypting
 // sensitive TOTP secrets at rest.
 type SecretCrypter interface {

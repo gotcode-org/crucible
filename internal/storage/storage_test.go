@@ -54,6 +54,7 @@ func TestSQLiteAdapter_OpenAndPragmas(t *testing.T) {
 	if fkEnabled != 1 {
 		t.Errorf("expected foreign_keys = 1, got %d", fkEnabled)
 	}
+	assertPooledConnectionPragmas(ctx, t, memAdapter)
 
 	// File-backed test with WAL
 	tmpDir := t.TempDir()
@@ -110,24 +111,32 @@ func assertPooledConnectionPragmas(
 			t.Errorf("closing second pooled connection: %v", closeErr)
 		}
 	}()
+	settings := []struct {
+		name    string
+		want    int
+		minimum int
+	}{
+		{name: "foreign_keys", want: 1},
+		{name: "busy_timeout", minimum: 5000},
+		{name: "synchronous", want: 1},
+		{name: "temp_store", want: 2},
+		{name: "cache_size", want: -64000},
+	}
 	for _, conn := range []*sql.Conn{conn1, conn2} {
-		var foreignKeys, busyTimeout int
-		if err := conn.QueryRowContext(ctx, "PRAGMA foreign_keys;").Scan(
-			&foreignKeys,
-		); err != nil {
-			t.Fatalf("querying pooled foreign_keys pragma: %v", err)
-		}
-		if err := conn.QueryRowContext(ctx, "PRAGMA busy_timeout;").Scan(
-			&busyTimeout,
-		); err != nil {
-			t.Fatalf("querying pooled busy_timeout pragma: %v", err)
-		}
-		if foreignKeys != 1 || busyTimeout < 5000 {
-			t.Errorf(
-				"pooled connection pragmas: foreign_keys=%d busy_timeout=%d",
-				foreignKeys,
-				busyTimeout,
-			)
+		for _, setting := range settings {
+			var got int
+			query := "PRAGMA " + setting.name + ";"
+			if err := conn.QueryRowContext(ctx, query).Scan(&got); err != nil {
+				t.Fatalf("querying pooled %s pragma: %v", setting.name, err)
+			}
+			matches := got == setting.want
+			if setting.minimum > 0 {
+				matches = got >= setting.minimum
+			}
+			if !matches {
+				t.Errorf("pooled %s pragma: got %d, want %d (minimum %d)",
+					setting.name, got, setting.want, setting.minimum)
+			}
 		}
 	}
 }

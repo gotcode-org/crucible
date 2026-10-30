@@ -17,12 +17,99 @@ import (
 
 // SQLiteAuthStore implements auth persistence ports on top of SQLite.
 type SQLiteAuthStore struct {
-	db *sql.DB
+	adapter *SQLiteAdapter
+	db      *sql.DB
 }
 
 // NewSQLiteAuthStore creates an auth persistence adapter backed by SQLite.
 func NewSQLiteAuthStore(adapter *SQLiteAdapter) *SQLiteAuthStore {
-	return &SQLiteAuthStore{db: adapter.db}
+	return &SQLiteAuthStore{adapter: adapter, db: adapter.db}
+}
+
+// ProvisionInitialAdmin atomically inserts the first user and session. The
+// conditional insert is evaluated under SQLite's write lock, so independent
+// service instances cannot both pass the no-users invariant.
+func (s *SQLiteAuthStore) ProvisionInitialAdmin(
+	ctx context.Context,
+	user *auth.User,
+	session *auth.Session,
+) error {
+	if user.Username != session.Username {
+		return errors.New("initial user and session usernames differ")
+	}
+	return s.adapter.withinTransaction(ctx, func(tx *sql.Tx) error {
+		var roleOverride *string
+		if user.RoleOverride != nil {
+			value := string(*user.RoleOverride)
+			roleOverride = &value
+		}
+		role := string(user.Role)
+		if role == "" {
+			role = string(auth.RoleViewer)
+		}
+		active := 0
+		if user.IsActive {
+			active = 1
+		}
+		mustChange := 0
+		if user.MustChangePassword {
+			mustChange = 1
+		}
+		createdAt := user.CreatedAt
+		if createdAt.IsZero() {
+			createdAt = time.Now().UTC()
+		}
+		passwordChangedAt := user.PasswordChangedAt
+		if passwordChangedAt.IsZero() {
+			passwordChangedAt = createdAt
+		}
+
+		const insertFirstUser = `
+INSERT INTO users (
+	username, password_hash, role, role_override, is_active,
+	must_change_password, password_changed_at, created_at
+)
+SELECT ?, ?, ?, ?, ?, ?, ?, ?
+WHERE NOT EXISTS (SELECT 1 FROM users)`
+		result, err := tx.ExecContext(
+			ctx,
+			insertFirstUser,
+			user.Username,
+			user.PasswordHash,
+			role,
+			roleOverride,
+			active,
+			mustChange,
+			passwordChangedAt.UTC().Format(time.RFC3339),
+			createdAt.UTC().Format(time.RFC3339),
+		)
+		if err != nil {
+			return fmt.Errorf("inserting initial administrator: %w", err)
+		}
+		rows, err := result.RowsAffected()
+		if err != nil {
+			return fmt.Errorf("checking initial administrator insert: %w", err)
+		}
+		if rows == 0 {
+			return auth.ErrSetupCompleted
+		}
+
+		const insertSession = `
+INSERT INTO sessions (id, username, role, created_at, expires_at)
+VALUES (?, ?, ?, ?, ?)`
+		if _, err := tx.ExecContext(
+			ctx,
+			insertSession,
+			session.ID,
+			session.Username,
+			string(session.Role),
+			session.CreatedAt.UTC().Format(time.RFC3339),
+			session.ExpiresAt.UTC().Format(time.RFC3339),
+		); err != nil {
+			return fmt.Errorf("inserting initial administrator session: %w", err)
+		}
+		return nil
+	})
 }
 
 // CreateUser registers a new persistent user in SQLite.

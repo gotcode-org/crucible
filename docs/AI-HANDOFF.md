@@ -1,136 +1,89 @@
 # Crucible — AI Development Handoff
 
-> **Purpose:** A concise, verified handoff between development sessions and AI assistants.
-> **Last updated:** 2026-10-30 14:02 EDT
-> **Repository inspected:** `/home/jovens/code/forks/crucible` local checkout
-> **Branch:** `development`
-> **HEAD:** `2739c81683db140900aac247c19c9c14ad6644da`
-> **Important:** Current source changes are uncommitted. The branch has a prior signed tag; it does not include the follow-up working-tree changes.
+> **Purpose:** Verified local state and concise guidance for the next development session.
+> **Last updated:** 2026-10-30
+> **Repository:** `/home/jovens/code/forks/crucible`
+> **Branch:** `repair/storage-boundary-hardening`
+> **HEAD:** Local follow-up commit on top of `854b304cdac232363c6f556e6562cbc8cbf48871`.
+> **Working tree:** Clean.
 
-## Current checkout update — 2026-10-30 14:02 EDT
+## Current checkout
 
-This update is authoritative for the local checkout and supersedes older
-mirror-side state notes below.
+- `upstream/main` and the fork's `origin/main` are at `854b304`. The fork was
+  fast-forwarded before preparing the local follow-up commit.
+- The local follow-up commit is not pushed. The existing tag and remote
+  `repair/storage-boundary-hardening` branch still point to the earlier commit
+  that upstream has already merged.
+- This document reports only the checkout above. It does not claim to know the
+  state of another private-server checkout or GitHub mirror.
 
-- **Repository:** `/home/jovens/code/forks/crucible`, the local Crucible
-  checkout; remotes are `origin` (developer fork) and `upstream` (mainline).
-- **Branch and base:** `development`, HEAD `2739c81683db140900aac247c19c9c14ad6644da`, one commit ahead of `upstream/main`.
-- **Existing published tag:** `pr/storage-adapter-boundaries-for-v0.1.0` points to HEAD before this follow-up. It does not include the current working-tree changes.
-- **Approved objective:** Complete the remaining storage-boundary scope: remove public raw SQL access, use concrete SQLite adapters at composition, reject PAT creation for unknown users, and make server dependencies explicit.
-- **Implemented in the working tree:** removed `SQLiteAdapter.DB()` and exported `WithinTransaction`; constructors now accept `*SQLiteAdapter`; token creation checks a feature-owned user lookup and token persistence no longer creates user rows; `NewServer` takes named dependencies and does not construct fallback services; file-backed SQLite connections receive foreign-key and busy-timeout pragmas individually.
-- **Tests and docs:** added storage API and pooled-connection checks plus a missing-user token invariant test; updated server fixtures, TODO completion states, recommendation dispositions, and documentation references to the corrected `RECOMMENDATIONS.md` filename.
-- **Verification:** full `make` passed, including lint, gosec, govulncheck, `CGO_ENABLED=0 go test -v ./...`, and builds. `git diff --check` passed.
-- **Working-tree state:** follow-up code and documentation changes are uncommitted. The existing `AGENTS.md` filename-reference change and recommendations-file rename are preserved.
-- **Next:** review the working diff and prepare a new commit proposal. Do not move the existing signed PR tag without separate explicit approval.
+## Project direction to preserve
 
-## 1. Current state
+- Crucible is a Go modular monolith using hexagonal architecture and CQRS.
+- `crucibled` is the daemon; `cruciblectl` is its separate management client.
+  The CLI and web UI use the same daemon API and application rules.
+- SQLite is the current persistence implementation. Keep ports feature-owned
+  and concrete adapters in `internal/storage`; do not add an ORM, generic SQL
+  dialect layer, or speculative PostgreSQL/MySQL adapter.
+- Keep the standalone product useful before implementing distributed worker
+  behavior. Define failure and delivery semantics before that work.
+- Local Unix-socket administration is an intentional trust boundary for
+  authorized local/SSH administrators; remote clients authenticate normally.
 
-The local `development` branch remains based on `upstream/main` and contains the
-previous committed adapter-boundary change plus its pushed signed tag. The
-current follow-up is in the working tree only. See the current checkout update
-above for exact state and verification; the mirror-side notes later in this
-file are historical context, not current repository state.
+## Follow-up changes in the local commit
 
-## 2. Project identity and confirmed direction
+- **SQLite connection settings:** Apply `foreign_keys`, `busy_timeout`,
+  `synchronous`, `temp_store`, and `cache_size` through the driver DSN so each
+  pooled connection receives them. Use a unique shared in-memory SQLite URI so
+  pooled connections see the same in-memory database. Keep WAL initialization
+  separate and verify it as a database-level setting.
+- **First administrator setup:** Add an auth-owned setup persistence port.
+  SQLite conditionally inserts the first user and inserts its initial session
+  in one transaction. The database, rather than only the service mutex,
+  enforces the single-setup invariant across separate adapters. Add concurrency
+  and rollback regression tests.
+- **Review status:** Correct this handoff and `RECOMMENDATIONS.md` to distinguish
+  the current branch from its earlier review baselines. Correct the schema
+  comment that claimed leases guarantee exactly-once job execution.
+- **Milestone:** Add pooled SQLite pragma verification to the existing Phase 1
+  architecture-stabilization scope. Setup atomicity was already tracked.
 
-The project context document records the following owner-confirmed direction:
+## Remaining Phase 1 work
 
-- Crucible is a Go modular monolith using Hexagonal Architecture
-  (Ports & Adapters) and CQRS.
-- `crucibled` is the server/daemon; `cruciblectl` is a separate CLI client.
-- The CLI and web UI use the same daemon management API/application-facing
-  capabilities. They must not duplicate business logic.
-- The CLI is intended to support remote network access and local Unix-socket
-  access.
-- SQLite is the initial database. PostgreSQL and MySQL are future adapter
-  targets, not permission to implement them prematurely.
-- Distributed workers are part of the broader intended architecture; preserve
-  the standalone-first delivery approach.
-- Product intent must not be confused with proof that a feature is implemented.
+`TODO.md` already tracks request-body limits, migration concurrency,
+configuration decoupling, API behavior documentation, and the architecture
+stabilization exit gate. Revalidate these against source before implementation.
+The audit ledger remains an existing later Phase 1 milestone. Distributed
+worker delivery semantics remain design work; the plan and roadmap reject an
+unqualified exactly-once guarantee.
 
-See root `CONTEXT.md` for the fuller background and
-`RECOMMENDATIONS.md` for the architecture review.
+## Verification status
 
-## 3. Important working rules
+- `GOCACHE=/tmp/crucible-gocache GOTMPDIR=/tmp go test ./internal/storage ./internal/auth` — passed.
+- `GOCACHE=/tmp/crucible-gocache GOTMPDIR=/tmp go test ./internal/server ./cmd/crucibled` — passed with permission to bind local test sockets. The sandboxed run could not open sockets.
+- `GOCACHE=/tmp/crucible-gocache GOTMPDIR=/tmp make check` — passed, including
+  dependency verification, gosec, govulncheck, all tests with `CGO_ENABLED=0`,
+  and the full race-enabled suite.
+- `/home/jovens/go/bin/golangci-lint run ./...` — passed.
+- `GOCACHE=/tmp/crucible-gocache GOTMPDIR=/tmp make build` — passed for both
+  binaries with `CGO_ENABLED=0`.
+- `git diff --check` — passed after the final documentation edits.
+- No tag update or push has been made for the local follow-up commit.
 
-Read root and nested `AGENTS.md` files and `CONTRIBUTING.md` before work.
-The root guidance includes strict rules that must be preserved:
+## Working rules
 
-- Never autonomously run `git commit`, `git tag`, or `git push`.
-- Obtain explicit owner approval for each such action.
-- Follow the repository's DCO and signed-tag workflow when the owner authorizes
-  those operations.
-- Do not add AI attribution trailers.
-- Do not introduce dependencies without approval.
-- Do not turn recommendations into implementation requirements without
-  approval.
-- Inspect current code and tests before relying on historical review findings.
-- Keep changes focused, preserve user changes, and report exact verification.
-- Update this handoff after meaningful work and important decisions.
+- Read `AGENTS.md`, `CONTRIBUTING.md`, `CONTEXT.md`, `PLAN.md`, and
+  `RECOMMENDATIONS.md` before making changes; inspect the current branch and
+  worktree rather than trusting this handoff blindly.
+- Add regression coverage for behavior changes and report the exact checks
+  performed.
+- Do not commit, tag, push, or merge without the explicit approval required by
+  `AGENTS.md`. Do not add AI attribution trailers.
+- Keep recommendations distinct from approved implementation scope and update
+  this handoff after meaningful changes.
 
-The expanded AI collaboration rules are in root `AGENTS.md`.
+## Next steps
 
-## 4. Architecture review recommendations — current disposition
-
-The source-level review findings were revalidated against the local checkout.
-The following are resolved in the working tree and verified by the full `make`
-run:
-
-1. Remove raw `*sql.DB` and `*sql.Tx` access from the exported storage API.
-2. Keep SQLite auth/token adapters in `internal/storage` and inject them at
-   composition.
-3. Remove HTTP adapter fallback construction and provide named dependencies.
-4. Reject token creation for unknown users without persisting either a user or
-   a token row.
-
-Other recommendations remain open or planned: cross-process setup atomicity,
-concurrent migration startup, configuration decoupling, API request limits,
-and future execution/cluster/audit contracts. See `RECOMMENDATIONS.md` and
-`TODO.md` for current status. These remaining items are outside the approved
-scope of this follow-up.
-
-## 5. Current active objective
-
-**Active objective:** Finish the approved storage-boundary follow-up, review
-its working-tree diff, and prepare a commit proposal. No commit or tag update is
-authorized by the current scope approval.
-
-## 6. Changes in this handoff update
-
-| File area | Change |
-|---|---|
-| `internal/storage` | Remove public SQL accessors, accept `*SQLiteAdapter` in SQLite store constructors, and initialize connection-local SQLite pragmas via the DSN. |
-| `internal/tokens` | Add a narrow `UserLookup` port; reject token creation when the user is absent; remove placeholder-user insertion. |
-| `internal/server` and `cmd/crucibled` | Replace positional/variadic server wiring with named dependencies; construct query and token services at the daemon composition root. |
-| Tests | Add missing-user, exported-boundary, and pooled-connection pragma checks; migrate fixtures to concrete adapters. |
-| Planning/docs | Check off the completed TODO items, update recommendation dispositions, and correct references to `RECOMMENDATIONS.md`. |
-
-## 7. Verification
-
-- `make` passed on 2026-10-30: module tidy/download, golangci-lint, gosec,
-  govulncheck, `CGO_ENABLED=0 go test -v ./...`, and both binary builds.
-- Affected package tests passed: `internal/auth`, `internal/tokens`,
-  `internal/storage`, and `internal/server`.
-- `git diff --check` passed.
-- No commit, tag, or push was performed for the follow-up changes.
-
-## 8. Decisions and constraints to preserve
-
-- `CONTEXT.md` remains the stable project/product context document.
-- `RECOMMENDATIONS.md` remains review advice, not an approved task list.
-- `docs/AI-HANDOFF.md` is the concise, evolving implementation/session status.
-- The owner must approve architectural changes and implementation scope.
-- The primary internal Git repository is authoritative; GitHub is a mirror.
-- The handoff must never imply that mirror state proves local or primary state.
-
-## 9. Open questions / next steps
-
-1. Review the complete working-tree diff, including the pending `AGENTS.md`
-   filename-reference change and the recommendations file rename.
-2. Propose a Conventional Commit message with DCO signoff and wait for owner
-   approval before committing.
-3. The existing pushed PR tag points to the prior commit; decide separately
-   whether the follow-up should use a new PR tag or another approved PR update.
-
-**Next agreed task:** Review this completed scope and prepare the commit
-proposal. Do not commit or move the published tag without explicit approval.
+1. Review the local commit and this handoff.
+2. Wait for explicit owner approval before pushing the feature branch or
+   replacing/updating a signed PR tag.

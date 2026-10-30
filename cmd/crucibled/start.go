@@ -117,6 +117,7 @@ func startCmd() *cobra.Command {
 				authStore,
 				authStore,
 				authStore,
+				authStore,
 				crypter,
 				restrictGroups,
 			)

@@ -39,6 +39,70 @@ func setupTestSQLiteAuthStore(
 	return adapter, store
 }
 
+func TestSQLiteAuthStore_ProvisionInitialAdminRollsBackSessionFailure(
+	t *testing.T,
+) {
+	t.Parallel()
+	ctx := context.Background()
+	adapter, store := setupTestSQLiteAuthStore(t)
+
+	// Seed an orphan session with foreign-key checks disabled on one connection.
+	// Reusing its primary key makes the setup session insert fail after the user
+	// insert, allowing this test to verify both writes roll back together.
+	conn, err := adapter.db.Conn(ctx)
+	if err != nil {
+		t.Fatalf("acquiring seed connection: %v", err)
+	}
+	if _, err := conn.ExecContext(ctx, "PRAGMA foreign_keys = OFF"); err != nil {
+		t.Fatalf("disabling foreign keys for seed: %v", err)
+	}
+	if _, err := conn.ExecContext(ctx, `
+INSERT INTO sessions (id, username, role, created_at, expires_at)
+VALUES ('duplicate-session', 'admin', 'admin', ?, ?)
+`, time.Now().UTC().Format(time.RFC3339), time.Now().UTC().Add(time.Hour).Format(time.RFC3339)); err != nil {
+		if closeErr := conn.Close(); closeErr != nil {
+			t.Errorf("closing seed connection after insert failure: %v", closeErr)
+		}
+		t.Fatalf("seeding conflicting session: %v", err)
+	}
+	if err := conn.Close(); err != nil {
+		t.Fatalf("closing seed connection: %v", err)
+	}
+
+	now := time.Now().UTC()
+	user := &auth.User{
+		Username:          "admin",
+		Role:              auth.RoleAdmin,
+		IsActive:          true,
+		CreatedAt:         now,
+		PasswordChangedAt: now,
+	}
+	session := &auth.Session{
+		ID:        "duplicate-session",
+		Username:  "admin",
+		Role:      auth.RoleAdmin,
+		CreatedAt: now,
+		ExpiresAt: now.Add(time.Hour),
+	}
+	if err := store.ProvisionInitialAdmin(ctx, user, session); err == nil {
+		t.Fatal("expected duplicate session insert to fail")
+	}
+	var userCount int
+	if err := adapter.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM users").Scan(&userCount); err != nil {
+		t.Fatalf("counting users after failed setup: %v", err)
+	}
+	if userCount != 0 {
+		t.Fatalf("failed setup left %d user rows, want none", userCount)
+	}
+	var sessionCount int
+	if err := adapter.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM sessions").Scan(&sessionCount); err != nil {
+		t.Fatalf("counting sessions after failed setup: %v", err)
+	}
+	if sessionCount != 1 {
+		t.Fatalf("failed setup changed the seeded session count to %d, want 1", sessionCount)
+	}
+}
+
 func TestSQLiteAuthenticator_Authenticate(t *testing.T) {
 	t.Parallel()
 	_, store := setupTestSQLiteAuthStore(t)

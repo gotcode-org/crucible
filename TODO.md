@@ -191,7 +191,10 @@ Format: `[state] (Priority) [domain/binary] Task description @assignee +tag`
 - [x] (A) [tokens] Reject token creation for unknown users without creating
       user rows; preserve the foreign-key invariant and test failure atomicity
       @jovens@gotcode.org +phase1 +tokens +storage +security
-- [ ] (A) [auth] Enforce first-admin setup atomically across independent
+- [x] (A) [storage] Apply all connection-local SQLite pragmas when each pooled
+      connection opens; verify file-backed and in-memory connections while
+      checking WAL mode separately @jovens@gotcode.org +phase1 +storage
+- [x] (A) [auth] Enforce first-admin setup atomically across independent
       service instances and SQLite connections; test concurrent setup attempts
       @jovens@gotcode.org +phase1 +auth +storage +concurrency
 - [ ] (A) [storage] Make concurrent SQLite migration startup deterministic;

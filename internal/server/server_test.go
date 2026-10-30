@@ -493,6 +493,7 @@ func setupAuthServer(
 		authStore,
 		authStore,
 		authStore,
+		authStore,
 		crypter,
 		false,
 	)
@@ -958,6 +959,7 @@ func setupRequire2FAServer(t *testing.T) (string, *http.Client) {
 		authStore,
 		authStore,
 		authStore,
+		authStore,
 		crypter,
 		false,
 	)
@@ -1140,6 +1142,7 @@ func setupPasswordLifecycleServer(
 	crypter := auth.NewPlaintextCrypter()
 	cmdSvc := auth.NewCommandService(
 		sqliteAuth,
+		authStore,
 		authStore,
 		authStore,
 		authStore,
@@ -2407,6 +2410,7 @@ func setupFreshServerWithoutUsers(
 	crypter := auth.NewPlaintextCrypter()
 	cmdSvc := auth.NewCommandService(
 		sqliteAuth,
+		authStore,
 		authStore,
 		authStore,
 		authStore,

@@ -6,6 +6,7 @@ package auth
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"time"
 )
@@ -120,6 +121,27 @@ func (m *MemoryStore) CreateUser(_ context.Context, u *User) error {
 		copied.PasswordChangedAt = time.Now().UTC()
 	}
 	m.users[u.Username] = &copied
+	return nil
+}
+
+// ProvisionInitialAdmin atomically stores the first user and its session.
+func (m *MemoryStore) ProvisionInitialAdmin(
+	_ context.Context,
+	user *User,
+	session *Session,
+) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if len(m.users) != 0 {
+		return ErrSetupCompleted
+	}
+	if user.Username != session.Username {
+		return errors.New("initial user and session usernames differ")
+	}
+	userCopy := *user
+	sessionCopy := *session
+	m.users[user.Username] = &userCopy
+	m.sessions[session.ID] = &sessionCopy
 	return nil
 }
 

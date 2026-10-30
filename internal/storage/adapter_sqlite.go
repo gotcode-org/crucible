@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"gotcode.org/crucible/internal/config"
+	"gotcode.org/crucible/internal/id"
 	_ "modernc.org/sqlite" // Pure Go SQLite driver (CGO_ENABLED=0)
 )
 
@@ -76,16 +77,21 @@ func NewSQLiteAdapterPath(
 	}
 
 	dsn := cleanPath
-	if cleanPath != ":memory:" {
-		params := url.Values{}
-		params.Add("_pragma", fmt.Sprintf("busy_timeout=%d", busyTimeoutMs))
-		params.Add("_pragma", "foreign_keys=ON")
-		separator := "?"
-		if strings.Contains(dsn, "?") {
-			separator = "&"
-		}
-		dsn += separator + params.Encode()
+	if cleanPath == ":memory:" {
+		dsn = "file:crucible-memory-" + id.NewSessionID() +
+			"?mode=memory&cache=shared"
 	}
+	params := url.Values{}
+	params.Add("_pragma", fmt.Sprintf("busy_timeout=%d", busyTimeoutMs))
+	params.Add("_pragma", "foreign_keys=ON")
+	params.Add("_pragma", "synchronous=NORMAL")
+	params.Add("_pragma", "temp_store=MEMORY")
+	params.Add("_pragma", "cache_size=-64000")
+	separator := "?"
+	if strings.Contains(dsn, "?") {
+		separator = "&"
+	}
+	dsn += separator + params.Encode()
 
 	sqlDB, err := sql.Open("sqlite", dsn)
 	if err != nil {
@@ -105,7 +111,7 @@ func NewSQLiteAdapterPath(
 		path: cleanPath,
 	}
 
-	if err := adapter.configurePragmas(ctx, walMode, busyTimeoutMs); err != nil {
+	if err := adapter.configureDatabasePragmas(ctx, walMode); err != nil {
 		if closeErr := sqlDB.Close(); closeErr != nil {
 			return nil, fmt.Errorf("closing db (%w) on pragma error: %v", err, closeErr)
 		}
@@ -122,29 +128,15 @@ func NewSQLiteAdapterPath(
 	return adapter, nil
 }
 
-func (a *SQLiteAdapter) configurePragmas(
+func (a *SQLiteAdapter) configureDatabasePragmas(
 	ctx context.Context,
 	walMode bool,
-	busyTimeoutMs int,
 ) error {
-	pragmas := []string{
-		"PRAGMA foreign_keys = ON;",
-		fmt.Sprintf("PRAGMA busy_timeout = %d;", busyTimeoutMs),
-		"PRAGMA synchronous = NORMAL;",
-		"PRAGMA temp_store = MEMORY;",
-		"PRAGMA cache_size = -64000;",
-	}
-
 	if walMode && a.path != ":memory:" {
-		pragmas = append([]string{"PRAGMA journal_mode = WAL;"}, pragmas...)
-	}
-
-	for _, pragma := range pragmas {
-		if _, err := a.db.ExecContext(ctx, pragma); err != nil {
-			return fmt.Errorf("executing pragma %q: %w", pragma, err)
+		if _, err := a.db.ExecContext(ctx, "PRAGMA journal_mode = WAL;"); err != nil {
+			return fmt.Errorf("executing pragma %q: %w", "PRAGMA journal_mode = WAL;", err)
 		}
 	}
-
 	return nil
 }
 

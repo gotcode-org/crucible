@@ -110,7 +110,8 @@ CREATE TABLE IF NOT EXISTS api_tokens (
     FOREIGN KEY(username) REFERENCES users(username) ON DELETE CASCADE
 );
 
--- Distributed Cluster Leases (Guarantees Exactly-Once Job Execution)
+-- Distributed cluster leases coordinate scheduled execution ownership; leases
+-- do not guarantee exactly-once external side effects.
 CREATE TABLE IF NOT EXISTS cluster_leases (
     slot_key      TEXT PRIMARY KEY,        -- SHA256(schedule_id + scheduled_time)
     holder_node   TEXT NOT NULL,           -- Node ID holding the lock
