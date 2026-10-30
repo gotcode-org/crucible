@@ -174,21 +174,21 @@ Format: `[state] (Priority) [domain/binary] Task description @assignee +tag`
       code and tests; record each finding as confirmed, resolved, not
       applicable, or open before implementation @jovens@gotcode.org +phase1
       +architecture
-- [ ] (A) [storage] Remove raw database/sql DB and Tx types from
+- [x] (A) [storage] Remove raw database/sql DB and Tx types from
       application-facing storage ports; define only transaction operations
       required by current use cases and test rollback semantics
       @jovens@gotcode.org +phase1 +storage +architecture
-- [ ] (A) [storage] Keep auth/token persistence ports feature-owned and
+- [x] (A) [storage] Keep auth/token persistence ports feature-owned and
       construct concrete SQLite adapters at daemon composition; remove raw
       database handle access from application callers
       @jovens@gotcode.org +phase1 +storage +architecture
-- [ ] (A) [server] Require core HTTP dependencies explicitly and remove
+- [x] (A) [server] Require core HTTP dependencies explicitly and remove
       inbound-adapter fallback construction of storage and token services
       @jovens@gotcode.org +phase1 +server +architecture
 - [ ] (A) [server] Bound all inbound JSON request bodies and reject oversized
       payloads consistently; cover token and authentication endpoints
       @jovens@gotcode.org +phase1 +server +security
-- [ ] (A) [tokens] Reject token creation for unknown users without creating
+- [x] (A) [tokens] Reject token creation for unknown users without creating
       user rows; preserve the foreign-key invariant and test failure atomicity
       @jovens@gotcode.org +phase1 +tokens +storage +security
 - [ ] (A) [auth] Enforce first-admin setup atomically across independent

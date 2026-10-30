@@ -324,28 +324,30 @@ The plan includes controller peers, replication, distributed leases, fencing, an
 
 ## Review limitations
 
-This was a source-level, read-only architecture review. It did not modify code, run tests, benchmark behavior, or verify runtime behavior. Findings should be revalidated against the current HEAD before implementation. In particular, inspect the current transaction usage and all call sites before choosing a replacement for the SQL-specific transaction callback.
+This was a source-level review. Findings should be revalidated against the
+current code before implementation; runtime guarantees require tests.
 
 ## Current Checkout Revalidation
 
-Revalidated by read-only source and test inspection on 2026-10-30 against
-`832bad8b9c82e5f2768143e2cb4f32247ab6dd1a`. The checkout has pre-existing
-uncommitted documentation changes. No tests or runtime checks were run, so
-these dispositions establish code-level evidence only.
+Revalidated against `2739c81683db140900aac247c19c9c14ad6644da` on
+2026-10-30. The storage-boundary follow-up is implemented in the working tree;
+affected package tests and the build pass. Full project checks remain before
+commit.
 
 Status meanings: **Confirmed** means the described condition exists in source;
 **Partial** means the capability exists but the stated contract is incomplete
 or contradicted; **Planned** means it is not implemented and is already
 roadmapped; **Open** means the recommendation needs a product decision before
-implementation; **Deferred** means no current defect or implementation task
-is warranted.
+implementation; **Resolved in working tree** means a change addresses the
+finding but is not yet committed; **Deferred** means no current defect or
+implementation task is warranted.
 
 | Finding | Status | Current evidence and disposition |
 |---|---|---|
-| Storage ports expose `*sql.DB` and `*sql.Tx` | Confirmed | `internal/storage/ports.go` exports both types; daemon and user-command composition obtain `engine.DB()`. Existing transaction tests cover commit and rollback but use raw `*sql.Tx`. Keep the proposed focused port redesign. |
-| Auth/token SQLite adapters sit in feature packages | Confirmed | `internal/auth/adapter_sqlite.go` and `internal/tokens/adapter_sqlite.go` import `database/sql` and implement feature-owned stores. Revalidate package placement while changing the storage boundary; no broad package rewrite is justified. |
-| HTTP adapter constructs fallback application/infrastructure services | Confirmed | `internal/server/adapter_http.go:NewServer` creates a storage query service and SQLite token store/service when omitted. Composition already constructs these collaborators in `cmd/crucibled/start.go`; remove fallback behavior in a focused change. |
-| Token persistence creates missing users | Confirmed | `internal/tokens/adapter_sqlite.go:CreateToken` inserts a minimal user row with `ON CONFLICT DO NOTHING` before token insertion. The token service has no user-existence port. The existing token tests seed users and do not cover unknown-user creation. |
+| Storage ports expose `*sql.DB` and `*sql.Tx` | Resolved in working tree | `Engine` no longer exposes `DB`; the SQLite adapter no longer exports `DB()` or `WithinTransaction`. Store constructors receive `*SQLiteAdapter` and use its private connection inside `internal/storage`. Commit and rollback behavior remains tested in that package, and a boundary test checks the exported method set. |
+| Auth/token SQLite adapters sit in feature packages | Resolved in working tree | Concrete stores now live in `internal/storage`; auth and token persistence ports remain feature-owned. Constructors accept the concrete SQLite adapter. |
+| HTTP adapter constructs fallback application/infrastructure services | Resolved in working tree | `NewServer` accepts a named `Dependencies` struct and creates no services. Engine, storage query, and token services are required; auth services are required when authentication is configured. The daemon composition root builds and injects them. |
+| Token persistence creates missing users | Resolved in working tree | Token creation checks the user-lookup port before persistence; the SQLite token store no longer creates placeholder users. A test verifies the unknown user and token remain absent after rejection. |
 | First-admin setup is safe across processes and atomic | Confirmed gap | `InitialSetup` uses `setupMu`, checks `CountUsers`, then separately calls `CreateUser` and `CreateSession`. The mutex is instance-local; the inspected setup tests cover validation/single invocation, not concurrent service instances or transaction failure. |
 | SQLite migration startup is serialized across connections | Confirmed gap | `migrateFS` reads applied versions once before its loop; each migration is separately transactional but there is no migration-wide lock or in-transaction recheck. Inspected storage tests cover normal migration and transaction rollback, not concurrent migration startup. |
 | SQLite adapter depends on application configuration | Confirmed | `internal/storage/adapter_sqlite.go` accepts `config.StorageConfig` and imports `internal/config`; its fallback path also comes from config. Translate config at the composition root if the adapter boundary is changed. |
@@ -365,10 +367,10 @@ is warranted.
 ### Review notes
 
 - The local branch and HEAD were inspected; HEAD matches the review baseline.
-- Relevant implementation and test files were read. No tests, builds, linters,
-  security scans, or benchmarks were executed in this revalidation.
+- Relevant implementation and test files were read. The affected package tests
+  and build were run; full project checks remain to be rerun.
 - The owner clarified that the socket's local-admin trust boundary is
   intentional. `PLAN.md` and `docs/api.md` now document it; no code correction
   is needed for this behavior.
-- This appendix records dispositions; it does not authorize implementation
-  beyond the existing owner-approved stabilization scope.
+- Resolved statuses above describe working-tree changes and are not committed
+  until the full project checks pass and the changes are reviewed.

@@ -2,20 +2,31 @@
 // Copyright (c) 2026 The GotCode Collective
 // See the LICENSE file in the project root for full license details.
 
-package storage_test
+package storage
 
 import (
 	"context"
 	"database/sql"
 	"errors"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 
 	"gotcode.org/crucible/internal/config"
 	"gotcode.org/crucible/internal/id"
-	"gotcode.org/crucible/internal/storage"
 )
+
+func TestSQLiteAdapter_DoesNotExportSQLAccess(t *testing.T) {
+	t.Parallel()
+
+	typeOfAdapter := reflect.TypeOf((*SQLiteAdapter)(nil))
+	for _, method := range []string{"DB", "WithinTransaction"} {
+		if _, ok := typeOfAdapter.MethodByName(method); ok {
+			t.Errorf("SQLiteAdapter unexpectedly exports %s", method)
+		}
+	}
+}
 
 func TestSQLiteAdapter_OpenAndPragmas(t *testing.T) {
 	t.Parallel()
@@ -24,7 +35,7 @@ func TestSQLiteAdapter_OpenAndPragmas(t *testing.T) {
 	defer cancel()
 
 	// In-memory test
-	memAdapter, err := storage.NewSQLiteAdapterPath(ctx, ":memory:", false, 5000)
+	memAdapter, err := NewSQLiteAdapterPath(ctx, ":memory:", false, 5000)
 	if err != nil {
 		t.Fatalf("NewSQLiteAdapterPath(:memory:) error: %v", err)
 	}
@@ -35,7 +46,7 @@ func TestSQLiteAdapter_OpenAndPragmas(t *testing.T) {
 	}()
 
 	var fkEnabled int
-	if queryErr := memAdapter.DB().
+	if queryErr := memAdapter.db.
 		QueryRowContext(ctx, "PRAGMA foreign_keys;").
 		Scan(&fkEnabled); queryErr != nil {
 		t.Fatalf("querying foreign_keys pragma: %v", queryErr)
@@ -48,13 +59,13 @@ func TestSQLiteAdapter_OpenAndPragmas(t *testing.T) {
 	tmpDir := t.TempDir()
 	dbPath := filepath.Join(tmpDir, "test.db")
 
-	fileAdapter, err := storage.NewSQLiteAdapter(ctx, config.StorageConfig{
+	fileAdapter, err := NewSQLiteAdapter(ctx, config.StorageConfig{
 		DatabasePath:  dbPath,
 		WALMode:       true,
 		BusyTimeoutMs: 5000,
 	})
 	if err != nil {
-		t.Fatalf("storage.NewSQLiteAdapter() error: %v", err)
+		t.Fatalf("NewSQLiteAdapter() error: %v", err)
 	}
 	defer func() {
 		if closeErr := fileAdapter.Close(); closeErr != nil {
@@ -63,13 +74,61 @@ func TestSQLiteAdapter_OpenAndPragmas(t *testing.T) {
 	}()
 
 	var journalMode string
-	if queryErr := fileAdapter.DB().
+	if queryErr := fileAdapter.db.
 		QueryRowContext(ctx, "PRAGMA journal_mode;").
 		Scan(&journalMode); queryErr != nil {
 		t.Fatalf("querying journal_mode: %v", queryErr)
 	}
 	if journalMode != "wal" {
 		t.Errorf("expected journal_mode = 'wal', got %s", journalMode)
+	}
+
+	assertPooledConnectionPragmas(ctx, t, fileAdapter)
+}
+
+func assertPooledConnectionPragmas(
+	ctx context.Context,
+	t *testing.T,
+	adapter *SQLiteAdapter,
+) {
+	t.Helper()
+	conn1, err := adapter.db.Conn(ctx)
+	if err != nil {
+		t.Fatalf("opening first pooled connection: %v", err)
+	}
+	defer func() {
+		if closeErr := conn1.Close(); closeErr != nil {
+			t.Errorf("closing first pooled connection: %v", closeErr)
+		}
+	}()
+	conn2, err := adapter.db.Conn(ctx)
+	if err != nil {
+		t.Fatalf("opening second pooled connection: %v", err)
+	}
+	defer func() {
+		if closeErr := conn2.Close(); closeErr != nil {
+			t.Errorf("closing second pooled connection: %v", closeErr)
+		}
+	}()
+	for _, conn := range []*sql.Conn{conn1, conn2} {
+		var foreignKeys, busyTimeout int
+		if err := conn.QueryRowContext(ctx, "PRAGMA foreign_keys;").Scan(
+			&foreignKeys,
+		); err != nil {
+			t.Fatalf("querying pooled foreign_keys pragma: %v", err)
+		}
+		if err := conn.QueryRowContext(ctx, "PRAGMA busy_timeout;").Scan(
+			&busyTimeout,
+		); err != nil {
+			t.Fatalf("querying pooled busy_timeout pragma: %v", err)
+		}
+		if foreignKeys != 1 || busyTimeout < 5000 {
+			t.Errorf(
+				"pooled connection pragmas: foreign_keys=%d busy_timeout=%d",
+				foreignKeys,
+				busyTimeout,
+			)
+		}
 	}
 }
 
@@ -79,7 +138,7 @@ func TestStorage_CommandAndQueryServices(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	adapter, err := storage.NewSQLiteAdapterPath(ctx, ":memory:", false, 5000)
+	adapter, err := NewSQLiteAdapterPath(ctx, ":memory:", false, 5000)
 	if err != nil {
 		t.Fatalf("failed to open in-memory adapter: %v", err)
 	}
@@ -89,13 +148,13 @@ func TestStorage_CommandAndQueryServices(t *testing.T) {
 		}
 	}()
 
-	cmdSvc := storage.NewCommandService(adapter)
-	querySvc := storage.NewQueryService(adapter)
+	cmdSvc := NewCommandService(adapter)
+	querySvc := NewQueryService(adapter)
 
 	// 1. Initial status before migrations
 	st1, err := querySvc.GetDatabaseStatus(
 		ctx,
-		storage.GetDatabaseStatusQuery{},
+		GetDatabaseStatusQuery{},
 	)
 	if err != nil {
 		t.Fatalf("querySvc.GetDatabaseStatus() error: %v", err)
@@ -105,7 +164,7 @@ func TestStorage_CommandAndQueryServices(t *testing.T) {
 	}
 
 	// 2. Execute migrations through CommandService
-	res, err := cmdSvc.RunMigrations(ctx, storage.RunMigrationsCommand{})
+	res, err := cmdSvc.RunMigrations(ctx, RunMigrationsCommand{})
 	if err != nil {
 		t.Fatalf("cmdSvc.RunMigrations() error: %v", err)
 	}
@@ -117,7 +176,7 @@ func TestStorage_CommandAndQueryServices(t *testing.T) {
 	// 3. Query applied migrations through QueryService
 	records, err := querySvc.GetAppliedMigrations(
 		ctx,
-		storage.GetAppliedMigrationsQuery{},
+		GetAppliedMigrationsQuery{},
 	)
 	if err != nil {
 		t.Fatalf("querySvc.GetAppliedMigrations() error: %v", err)
@@ -129,7 +188,7 @@ func TestStorage_CommandAndQueryServices(t *testing.T) {
 	// 4. Status post-migration
 	st2, err := querySvc.GetDatabaseStatus(
 		ctx,
-		storage.GetDatabaseStatusQuery{},
+		GetDatabaseStatusQuery{},
 	)
 	if err != nil {
 		t.Fatalf("querySvc.GetDatabaseStatus() post-migration error: %v", err)
@@ -154,7 +213,7 @@ func TestAuditLedger_ImmutabilityTriggers(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	adapter, err := storage.NewSQLiteAdapterPath(ctx, ":memory:", false, 5000)
+	adapter, err := NewSQLiteAdapterPath(ctx, ":memory:", false, 5000)
 	if err != nil {
 		t.Fatalf("failed to open adapter: %v", err)
 	}
@@ -175,7 +234,7 @@ INSERT INTO audit_ledger (
     resource_id, status, details, previous_hash, record_hash
 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 
-	_, err = adapter.DB().ExecContext(
+	_, err = adapter.db.ExecContext(
 		ctx, insertQuery,
 		auditID, time.Now().UTC().Format(time.RFC3339Nano),
 		"usr_01JBCDEF", "user", "127.0.0.1", "auth.login.success",
@@ -188,7 +247,7 @@ INSERT INTO audit_ledger (
 	}
 
 	// Attempting to UPDATE an audit record must be rejected by trigger.
-	_, updateErr := adapter.DB().ExecContext(
+	_, updateErr := adapter.db.ExecContext(
 		ctx,
 		"UPDATE audit_ledger SET status = 'FAILURE' WHERE id = ?",
 		auditID,
@@ -200,7 +259,7 @@ INSERT INTO audit_ledger (
 	}
 
 	// Attempting to DELETE an audit record must be rejected by trigger.
-	_, deleteErr := adapter.DB().ExecContext(
+	_, deleteErr := adapter.db.ExecContext(
 		ctx,
 		"DELETE FROM audit_ledger WHERE id = ?",
 		auditID,
@@ -218,7 +277,7 @@ func TestForeignKeyCascades(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	adapter, err := storage.NewSQLiteAdapterPath(ctx, ":memory:", false, 5000)
+	adapter, err := NewSQLiteAdapterPath(ctx, ":memory:", false, 5000)
 	if err != nil {
 		t.Fatalf("failed to open adapter: %v", err)
 	}
@@ -233,7 +292,7 @@ func TestForeignKeyCascades(t *testing.T) {
 	}
 
 	username := "test_operator"
-	_, err = adapter.DB().ExecContext(
+	_, err = adapter.db.ExecContext(
 		ctx,
 		"INSERT INTO users (username) VALUES (?)",
 		username,
@@ -243,7 +302,7 @@ func TestForeignKeyCascades(t *testing.T) {
 	}
 
 	deviceID := id.NewDeviceID()
-	_, err = adapter.DB().ExecContext(
+	_, err = adapter.db.ExecContext(
 		ctx,
 		"INSERT INTO user_totp_devices (id, username, name, secret_key) "+
 			"VALUES (?, ?, ?, ?)",
@@ -254,7 +313,7 @@ func TestForeignKeyCascades(t *testing.T) {
 	}
 
 	// Delete user; cascade should delete user_totp_devices
-	_, err = adapter.DB().ExecContext(
+	_, err = adapter.db.ExecContext(
 		ctx,
 		"DELETE FROM users WHERE username = ?",
 		username,
@@ -264,7 +323,7 @@ func TestForeignKeyCascades(t *testing.T) {
 	}
 
 	var count int
-	err = adapter.DB().QueryRowContext(
+	err = adapter.db.QueryRowContext(
 		ctx,
 		"SELECT COUNT(*) FROM user_totp_devices WHERE username = ?",
 		username,
@@ -283,7 +342,7 @@ func TestTransactor_CommitAndRollback(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	adapter, err := storage.NewSQLiteAdapterPath(ctx, ":memory:", false, 5000)
+	adapter, err := NewSQLiteAdapterPath(ctx, ":memory:", false, 5000)
 	if err != nil {
 		t.Fatalf("failed to open adapter: %v", err)
 	}
@@ -298,7 +357,7 @@ func TestTransactor_CommitAndRollback(t *testing.T) {
 	}
 
 	// Commit success
-	err = adapter.WithinTransaction(ctx, func(tx *sql.Tx) error {
+	err = adapter.withinTransaction(ctx, func(tx *sql.Tx) error {
 		_, execErr := tx.ExecContext(
 			ctx,
 			"INSERT INTO users (username) VALUES (?)",
@@ -311,7 +370,7 @@ func TestTransactor_CommitAndRollback(t *testing.T) {
 	}
 
 	var exists bool
-	err = adapter.DB().QueryRowContext(
+	err = adapter.db.QueryRowContext(
 		ctx,
 		"SELECT 1 FROM users WHERE username = 'user_commit'",
 	).Scan(&exists)
@@ -320,7 +379,7 @@ func TestTransactor_CommitAndRollback(t *testing.T) {
 	}
 
 	// Rollback on error
-	err = adapter.WithinTransaction(ctx, func(tx *sql.Tx) error {
+	err = adapter.withinTransaction(ctx, func(tx *sql.Tx) error {
 		if _, execErr := tx.ExecContext(
 			ctx,
 			"INSERT INTO users (username) VALUES (?)",
@@ -335,7 +394,7 @@ func TestTransactor_CommitAndRollback(t *testing.T) {
 	}
 
 	var rollbackCount int
-	err = adapter.DB().QueryRowContext(
+	err = adapter.db.QueryRowContext(
 		ctx,
 		"SELECT COUNT(*) FROM users WHERE username = 'user_rollback'",
 	).Scan(&rollbackCount)

@@ -61,7 +61,7 @@ These are findings against the reviewed baseline, not guarantees about the curre
 - Auth's in-process setup mutex does not by itself coordinate multiple daemon processes sharing a database.
 - SQLite migration startup should be reviewed for concurrent-process safety if multiple roles/processes may initialize the same database.
 
-See [recommendations.md](recommendations.md) for the prioritized remediation plan and rationale.
+See [RECOMMENDATIONS.md](RECOMMENDATIONS.md) for the prioritized remediation plan and rationale.
 
 ## Multi-binary model and management API
 
@@ -91,13 +91,13 @@ The API operations and business rules must be shared across web UI, remote CLI, 
 
 ## Suggested first development task
 
-Begin with the first recommendation in [recommendations.md](recommendations.md): remove raw `*sql.DB` leakage from application-facing storage ports and callers. First inspect the current implementation and tests, then design a database-independent transaction boundary. Keep the change small and prove that auth/token application code does not need to know about `database/sql` or SQLite. Do not combine this with a full persistence-directory reorganization unless tests or code structure make that necessary.
+Begin with the first recommendation in [RECOMMENDATIONS.md](RECOMMENDATIONS.md): remove raw `*sql.DB` leakage from application-facing storage ports and callers. First inspect the current implementation and tests, then design a database-independent transaction boundary. Keep the change small and prove that auth/token application code does not need to know about `database/sql` or SQLite. Do not combine this with a full persistence-directory reorganization unless tests or code structure make that necessary.
 
 ## Session handoff checklist
 
 At the beginning of a new session:
 
-1. Read this file and `recommendations.md`.
+1. Read this file and `RECOMMENDATIONS.md`.
 2. Check current branch and HEAD; compare with the baseline SHA above.
 3. Inspect the exact files involved before relying on historical findings.
 4. Confirm the immediate task and whether changes should remain local, be committed to a branch, or be opened as a PR.

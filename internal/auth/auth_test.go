@@ -6,9 +6,7 @@ package auth_test
 
 import (
 	"context"
-	"database/sql"
 	"errors"
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -164,29 +162,27 @@ func TestPAMAuthenticatorInputValidation(t *testing.T) {
 	}
 }
 
-func setupTestDB(t *testing.T) *sql.DB {
+func setupTestDB(t *testing.T) *storage.SQLiteAdapter {
 	t.Helper()
-	db, err := sql.Open("sqlite", ":memory:")
+	dbPath := filepath.Join(t.TempDir(), "auth-test.db")
+	adapter, err := storage.NewSQLiteAdapterPath(
+		context.Background(),
+		dbPath,
+		false,
+		5000,
+	)
 	if err != nil {
-		t.Fatalf("opening in-memory sqlite db: %v", err)
+		t.Fatalf("opening sqlite adapter: %v", err)
 	}
-
-	for _, f := range []string{
-		"001_initial.sql",
-		"004_sqlite_users.sql",
-		"005_password_lifecycle.sql",
-	} {
-		schemaPath := filepath.Join("..", "storage", "schema", f)
-		schemaSQL, err := os.ReadFile(schemaPath)
-		if err != nil {
-			t.Fatalf("reading schema file %s: %v", schemaPath, err)
-		}
-		if _, err := db.Exec(string(schemaSQL)); err != nil {
-			t.Fatalf("applying schema %s: %v", f, err)
-		}
+	if err := adapter.Migrate(context.Background()); err != nil {
+		t.Fatalf("running sqlite migrations: %v", err)
 	}
-
-	return db
+	t.Cleanup(func() {
+		if err := adapter.Close(); err != nil {
+			t.Errorf("closing sqlite adapter: %v", err)
+		}
+	})
+	return adapter
 }
 
 func TestSQLiteStore_User(t *testing.T) {

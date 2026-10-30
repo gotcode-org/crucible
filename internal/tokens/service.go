@@ -16,12 +16,14 @@ import (
 // TokenService implements the inbound application service port for Personal
 // Access Tokens.
 type TokenService struct {
-	store TokenStore
+	store      TokenStore
+	userLookup UserLookup
 }
 
-// NewTokenService constructs a new TokenService backed by the supplied store.
-func NewTokenService(store TokenStore) *TokenService {
-	return &TokenService{store: store}
+// NewTokenService constructs a token service with its persistence and user
+// lookup ports.
+func NewTokenService(store TokenStore, userLookup UserLookup) *TokenService {
+	return &TokenService{store: store, userLookup: userLookup}
 }
 
 // CreateToken generates and persists a new Personal Access Token.
@@ -36,6 +38,9 @@ func (s *TokenService) CreateToken(
 	username := strings.TrimSpace(cmd.Username)
 	if username == "" {
 		return nil, ErrInvalidToken
+	}
+	if _, err := s.userLookup.GetUser(ctx, username); err != nil {
+		return nil, err
 	}
 
 	role := cmd.Role

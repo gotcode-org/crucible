@@ -6,53 +6,42 @@ package tokens_test
 
 import (
 	"context"
-	"database/sql"
-	"os"
+	"errors"
 	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
-	_ "modernc.org/sqlite"
-
 	"gotcode.org/crucible/internal/auth"
 	"gotcode.org/crucible/internal/storage"
 	"gotcode.org/crucible/internal/tokens"
 )
 
-func setupTestDB(t *testing.T) *sql.DB {
+func setupTestDB(t *testing.T) *storage.SQLiteAdapter {
 	t.Helper()
 	dbPath := filepath.Join(t.TempDir(), "test.db")
-	dsn := dbPath + "?_pragma=busy_timeout(5000)&" +
-		"_pragma=journal_mode(WAL)&_pragma=foreign_keys(ON)"
-	db, err := sql.Open("sqlite", dsn)
+	db, err := storage.NewSQLiteAdapterPath(
+		context.Background(),
+		dbPath,
+		true,
+		5000,
+	)
 	if err != nil {
-		t.Fatalf("opening sqlite db: %v", err)
+		t.Fatalf("opening sqlite adapter: %v", err)
+	}
+	if err := db.Migrate(context.Background()); err != nil {
+		t.Fatalf("running sqlite migrations: %v", err)
 	}
 
-	for _, f := range []string{
-		"001_initial.sql",
-		"004_sqlite_users.sql",
-		"005_password_lifecycle.sql",
+	users := storage.NewSQLiteAuthStore(db)
+	for _, user := range []auth.User{
+		{Username: "operator", Role: auth.RoleOperator, IsActive: true},
+		{Username: "alice", Role: auth.RoleAdmin, IsActive: true},
 	} {
-		p := filepath.Join("..", "storage", "schema", f)
-		sqlBytes, err := os.ReadFile(p)
-		if err != nil {
-			t.Fatalf("reading schema file %s: %v", p, err)
+		if err := users.CreateUser(context.Background(), &user); err != nil {
+			t.Fatalf("seeding user %s: %v", user.Username, err)
 		}
-		if _, err := db.Exec(string(sqlBytes)); err != nil {
-			t.Fatalf("applying schema %s: %v", f, err)
-		}
-	}
-
-	// Insert test users to satisfy foreign key constraints
-	ensureUser := `
-INSERT INTO users (username, role, is_active, created_at)
-VALUES ('operator', 'operator', 1, CURRENT_TIMESTAMP),
-       ('alice', 'admin', 1, CURRENT_TIMESTAMP)`
-	if _, err := db.Exec(ensureUser); err != nil {
-		t.Fatalf("seeding test users: %v", err)
 	}
 
 	return db
@@ -111,7 +100,7 @@ func TestTokenService_CreateAndValidate(t *testing.T) {
 	}()
 
 	store := storage.NewSQLiteTokenStore(db)
-	svc := tokens.NewTokenService(store)
+	svc := tokens.NewTokenService(store, storage.NewSQLiteAuthStore(db))
 	ctx := context.Background()
 
 	res, err := svc.CreateToken(ctx, tokens.CreateTokenCommand{
@@ -158,6 +147,45 @@ func TestTokenService_CreateAndValidate(t *testing.T) {
 	}
 }
 
+func TestTokenService_CreateTokenRequiresExistingUser(t *testing.T) {
+	t.Parallel()
+
+	engine := setupTestDB(t)
+	defer func() {
+		if err := engine.Close(); err != nil {
+			t.Errorf("closing test adapter: %v", err)
+		}
+	}()
+
+	userStore := storage.NewSQLiteAuthStore(engine)
+	tokenStore := storage.NewSQLiteTokenStore(engine)
+	service := tokens.NewTokenService(tokenStore, userStore)
+	_, err := service.CreateToken(context.Background(), tokens.CreateTokenCommand{
+		Username: "missing-user",
+		Name:     "must-not-be-created",
+	})
+	if !errors.Is(err, auth.ErrUserNotFound) {
+		t.Fatalf("expected auth.ErrUserNotFound, got %v", err)
+	}
+
+	if _, userErr := userStore.GetUser(
+		context.Background(),
+		"missing-user",
+	); !errors.Is(userErr, auth.ErrUserNotFound) {
+		t.Fatalf("missing user was created: %v", userErr)
+	}
+	tokensForUser, err := tokenStore.ListUserTokens(
+		context.Background(),
+		"missing-user",
+	)
+	if err != nil {
+		t.Fatalf("listing tokens for missing user: %v", err)
+	}
+	if len(tokensForUser) != 0 {
+		t.Fatalf("expected no persisted tokens, got %d", len(tokensForUser))
+	}
+}
+
 func TestTokenService_Revocation(t *testing.T) {
 	t.Parallel()
 	db := setupTestDB(t)
@@ -168,7 +196,7 @@ func TestTokenService_Revocation(t *testing.T) {
 	}()
 
 	store := storage.NewSQLiteTokenStore(db)
-	svc := tokens.NewTokenService(store)
+	svc := tokens.NewTokenService(store, storage.NewSQLiteAuthStore(db))
 	ctx := context.Background()
 
 	res, err := svc.CreateToken(ctx, tokens.CreateTokenCommand{
@@ -207,7 +235,7 @@ func TestTokenService_Expiration(t *testing.T) {
 	}()
 
 	store := storage.NewSQLiteTokenStore(db)
-	svc := tokens.NewTokenService(store)
+	svc := tokens.NewTokenService(store, storage.NewSQLiteAuthStore(db))
 	ctx := context.Background()
 
 	// Create already-expired token directly via store
@@ -249,7 +277,7 @@ func TestTokenService_Concurrency(t *testing.T) {
 	}()
 
 	store := storage.NewSQLiteTokenStore(db)
-	svc := tokens.NewTokenService(store)
+	svc := tokens.NewTokenService(store, storage.NewSQLiteAuthStore(db))
 	ctx := context.Background()
 
 	res, err := svc.CreateToken(ctx, tokens.CreateTokenCommand{

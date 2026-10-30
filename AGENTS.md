@@ -566,7 +566,7 @@ Before substantive work, the agent MUST:
    and the relevant parts of `ARCHITECTURE.md`, `docs/ROADMAP.md`,
    `docs/DECISIONS/README.md`, and the applicable accepted or proposed ADRs.
    Also inspect the relevant parts of `PLAN.md`, `TODO`, and
-   `recommendations.md`.
+   `RECOMMENDATIONS.md`.
 3. Inspect the current branch, HEAD, working-tree status, and relevant recent
    history. Do not assume a previous session's branch or baseline is current.
 4. Inspect the actual implementation and tests relevant to the requested task.
@@ -593,7 +593,7 @@ clarify before proceeding where they could be affected.
   decision; implementation status must still be verified in code and tests.
 - Treat `PLAN.md` and `TODO` as detailed planning/backlog sources, subject
   to owner approval and reconciliation with the strategic roadmap.
-- Treat `recommendations.md` as review advice, not approved requirements or
+- Treat `RECOMMENDATIONS.md` as review advice, not approved requirements or
   authorization to implement.
 - Do not convert an observation, suggestion, inferred requirement, or
   architectural preference into a project decision without the owner's
@@ -619,7 +619,7 @@ clarify before proceeding where they could be affected.
 
 ### 8.3 Recommendations & Review Findings
 
-Before implementing an item from `recommendations.md`:
+Before implementing an item from `RECOMMENDATIONS.md`:
 
 1. Revalidate the finding against the current branch and HEAD.
 2. Identify the exact code paths, interfaces, tests, and runtime assumptions
@@ -642,7 +642,7 @@ sessions and AI assistants. It complements rather than replaces
 
 - `CONTEXT.md`: relatively stable product identity, confirmed architecture,
   and important historical review context.
-- `recommendations.md`: review findings and proposed improvements, not
+- `RECOMMENDATIONS.md`: review findings and proposed improvements, not
   automatically approved work.
 - `docs/AI-HANDOFF.md`: current, changing implementation status and the
   exact point from which the next session should continue.

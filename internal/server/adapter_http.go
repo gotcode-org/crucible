@@ -52,15 +52,22 @@ type HTTPServer struct {
 	errs         []error
 }
 
+// Dependencies lists the application and storage ports required by the HTTP
+// adapter. Concrete implementations are selected by the composition root.
+type Dependencies struct {
+	Engine       storage.Engine
+	QueryService storage.QueryHandler
+	// Auth handlers may be nil when authentication is not configured.
+	AuthCommands auth.CommandHandler
+	AuthQueries  auth.QueryHandler
+	TokenService tokens.Service
+}
+
 // NewServer initializes a new HTTPServer with embedded web routes and static
 // asset handlers.
 func NewServer(
 	cfg Config,
-	engine storage.Engine,
-	querySvc storage.QueryHandler,
-	authCmd auth.CommandHandler,
-	authQuery auth.QueryHandler,
-	tokenSvc ...tokens.Service,
+	deps Dependencies,
 ) (*HTTPServer, error) {
 	if cfg.HTTPBind == "" {
 		cfg.HTTPBind = "127.0.0.1"
@@ -72,22 +79,27 @@ func NewServer(
 		cfg.Version = "v0.1.0"
 	}
 
-	if querySvc == nil && engine != nil {
-		querySvc = storage.NewQueryService(engine)
+	if deps.Engine == nil || deps.QueryService == nil ||
+		deps.TokenService == nil {
+		return nil, errors.New(
+			"server engine, query service, and token service are required",
+		)
 	}
-
-	var tSvc tokens.Service
-	if len(tokenSvc) > 0 {
-		tSvc = tokenSvc[0]
+	if cfg.AuthProvider != "" &&
+		(deps.AuthCommands == nil || deps.AuthQueries == nil) {
+		return nil, errors.New(
+			"authentication command and query services are required " +
+				"when authentication is configured",
+		)
 	}
 
 	s := &HTTPServer{
 		cfg:       cfg,
-		engine:    engine,
-		querySvc:  querySvc,
-		authCmd:   authCmd,
-		authQuery: authQuery,
-		tokenSvc:  tSvc,
+		engine:    deps.Engine,
+		querySvc:  deps.QueryService,
+		authCmd:   deps.AuthCommands,
+		authQuery: deps.AuthQueries,
+		tokenSvc:  deps.TokenService,
 		mux:       http.NewServeMux(),
 	}
 

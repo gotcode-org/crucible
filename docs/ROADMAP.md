@@ -14,7 +14,7 @@ Use the project documents as follows:
 - [`ARCHITECTURE.md`](../ARCHITECTURE.md) describes the architecture; it requires reconciliation with the current context and decisions before being treated as fully authoritative.
 - [`PLAN.md`](../PLAN.md) is the detailed technical blueprint. Its proposals must be checked against current owner decisions.
 - [`TODO.md`](../TODO.md) is the task-level implementation checklist.
-- [`recommendations.md`](../recommendations.md) contains review findings and proposals, not approved implementation tasks.
+- [`RECOMMENDATIONS.md`](../RECOMMENDATIONS.md) contains review findings and proposals, not approved implementation tasks.
 - [`DECISIONS/`](./DECISIONS/README.md) records decisions, rationale, consequences, and unresolved questions.
 - [`AI-HANDOFF.md`](./AI-HANDOFF.md) records the verified state of work between sessions.
 

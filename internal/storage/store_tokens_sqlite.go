@@ -22,8 +22,8 @@ type SQLiteTokenStore struct {
 }
 
 // NewSQLiteTokenStore creates a token persistence adapter backed by SQLite.
-func NewSQLiteTokenStore(db *sql.DB) *SQLiteTokenStore {
-	return &SQLiteTokenStore{db: db}
+func NewSQLiteTokenStore(adapter *SQLiteAdapter) *SQLiteTokenStore {
+	return &SQLiteTokenStore{db: adapter.db}
 }
 
 // CreateToken persists a new token record.
@@ -38,24 +38,6 @@ func (s *SQLiteTokenStore) CreateToken(ctx context.Context, tok *tokendomain.API
 	if tok.ExpiresAt != nil && !tok.ExpiresAt.IsZero() {
 		exp := tok.ExpiresAt.UTC().Format(time.RFC3339)
 		expiresAtStr = &exp
-	}
-
-	// Satisfy foreign key constraint on users table
-	nowStr := time.Now().UTC().Format(time.RFC3339)
-	ensureUser := `
-INSERT INTO users (username, created_at)
-VALUES (?, ?)
-ON CONFLICT(username) DO NOTHING`
-	if _, uErr := s.db.ExecContext(
-		ctx,
-		ensureUser,
-		tok.Username,
-		nowStr,
-	); uErr != nil {
-		return fmt.Errorf(
-			"ensuring user before token creation: %w",
-			uErr,
-		)
 	}
 
 	query := `

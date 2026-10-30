@@ -60,7 +60,7 @@ func setupTestServer(
 		Version:    "v0.1.0-test",
 	}
 
-	srv, err := server.NewServer(srvCfg, engine, nil, nil, nil)
+	srv, err := server.NewServer(srvCfg, testServerDependencies(engine))
 	if err != nil {
 		t.Fatalf("failed to create server: %v", err)
 	}
@@ -87,6 +87,18 @@ func setupTestServer(
 	})
 
 	return srv, engine, sockPath
+}
+
+func testServerDependencies(engine *storage.SQLiteAdapter) server.Dependencies {
+	authStore := storage.NewSQLiteAuthStore(engine)
+	return server.Dependencies{
+		Engine:       engine,
+		QueryService: storage.NewQueryService(engine),
+		TokenService: tokens.NewTokenService(
+			storage.NewSQLiteTokenStore(engine),
+			authStore,
+		),
+	}
 }
 
 func TestServer_Healthz_OK(t *testing.T) {
@@ -418,7 +430,7 @@ func TestServer_GracefulShutdown(t *testing.T) {
 		HTTPBind:   "127.0.0.1",
 		HTTPPort:   0,
 		SocketPath: sockPath,
-	}, engine, nil, nil, nil)
+	}, testServerDependencies(engine))
 	if err != nil {
 		t.Fatalf("creating server: %v", err)
 	}
@@ -472,7 +484,7 @@ func setupAuthServer(
 	memAuth := auth.NewMemoryAuthenticator()
 	memAuth.AddUser("alice", "correct-horse", auth.RoleAdmin)
 
-	authStore := storage.NewSQLiteAuthStore(engine.DB())
+	authStore := storage.NewSQLiteAuthStore(engine)
 	crypter := auth.NewPlaintextCrypter()
 	cmdSvc := auth.NewCommandService(
 		memAuth,
@@ -492,9 +504,16 @@ func setupAuthServer(
 		SocketPath: sockPath,
 		DaemonMode: "standalone",
 		Version:    "v0.1.0-authtest",
-	}, engine, nil, cmdSvc, querySvc,
-		tokens.NewTokenService(storage.NewSQLiteTokenStore(engine.DB())),
-	)
+	}, server.Dependencies{
+		Engine:       engine,
+		QueryService: storage.NewQueryService(engine),
+		AuthCommands: cmdSvc,
+		AuthQueries:  querySvc,
+		TokenService: tokens.NewTokenService(
+			storage.NewSQLiteTokenStore(engine),
+			authStore,
+		),
+	})
 	if err != nil {
 		t.Fatalf("creating server: %v", err)
 	}
@@ -930,7 +949,7 @@ func setupRequire2FAServer(t *testing.T) (string, *http.Client) {
 
 	memAuth := auth.NewMemoryAuthenticator()
 	memAuth.AddUser("dave", "securepass123", auth.RoleAdmin)
-	authStore := storage.NewSQLiteAuthStore(engine.DB())
+	authStore := storage.NewSQLiteAuthStore(engine)
 	crypter := auth.NewPlaintextCrypter()
 	cmdSvc := auth.NewCommandService(
 		memAuth,
@@ -952,7 +971,16 @@ func setupRequire2FAServer(t *testing.T) (string, *http.Client) {
 		Version:      "v0.1.0-authtest",
 		AuthProvider: "sqlite",
 		Require2FA:   true,
-	}, engine, nil, cmdSvc, querySvc)
+	}, server.Dependencies{
+		Engine:       engine,
+		QueryService: storage.NewQueryService(engine),
+		AuthCommands: cmdSvc,
+		AuthQueries:  querySvc,
+		TokenService: tokens.NewTokenService(
+			storage.NewSQLiteTokenStore(engine),
+			authStore,
+		),
+	})
 	if err != nil {
 		t.Fatalf("creating server: %v", err)
 	}
@@ -1100,7 +1128,7 @@ func setupPasswordLifecycleServer(
 		t.Fatalf("running initial migration: %v", mErr)
 	}
 
-	authStore := storage.NewSQLiteAuthStore(engine.DB())
+	authStore := storage.NewSQLiteAuthStore(engine)
 	expiry, pErr := policy.ExpiryDuration()
 	if pErr != nil {
 		t.Fatalf("parsing policy duration: %v", pErr)
@@ -1151,9 +1179,16 @@ func setupPasswordLifecycleServer(
 		DaemonMode:     "standalone",
 		Version:        "v0.1.0-pwdtest",
 		PasswordPolicy: policy,
-	}, engine, nil, cmdSvc, querySvc,
-		tokens.NewTokenService(storage.NewSQLiteTokenStore(engine.DB())),
-	)
+	}, server.Dependencies{
+		Engine:       engine,
+		QueryService: storage.NewQueryService(engine),
+		AuthCommands: cmdSvc,
+		AuthQueries:  querySvc,
+		TokenService: tokens.NewTokenService(
+			storage.NewSQLiteTokenStore(engine),
+			authStore,
+		),
+	})
 	if err != nil {
 		t.Fatalf("creating server: %v", err)
 	}
@@ -2209,6 +2244,7 @@ func testAPIDualTransportUnixCreate(
 	t.Helper()
 	createPayload := strings.NewReader(`{
 		"name": "remote-workstation",
+		"username": "admin",
 		"role": "admin",
 		"expires_in": "720h"
 	}`)
@@ -2359,7 +2395,7 @@ func setupFreshServerWithoutUsers(
 		t.Fatalf("running initial migration: %v", mErr)
 	}
 
-	authStore := storage.NewSQLiteAuthStore(engine.DB())
+	authStore := storage.NewSQLiteAuthStore(engine)
 	expiry, pErr := policy.ExpiryDuration()
 	if pErr != nil {
 		t.Fatalf("parsing policy duration: %v", pErr)
@@ -2393,7 +2429,16 @@ func setupFreshServerWithoutUsers(
 		DaemonMode:     "standalone",
 		Version:        "v0.1.0-setuptest",
 		PasswordPolicy: policy,
-	}, engine, nil, cmdSvc, querySvc)
+	}, server.Dependencies{
+		Engine:       engine,
+		QueryService: storage.NewQueryService(engine),
+		AuthCommands: cmdSvc,
+		AuthQueries:  querySvc,
+		TokenService: tokens.NewTokenService(
+			storage.NewSQLiteTokenStore(engine),
+			authStore,
+		),
+	})
 	if err != nil {
 		t.Fatalf("creating server: %v", err)
 	}

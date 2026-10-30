@@ -89,7 +89,7 @@ func userAddCmd() *cobra.Command {
 				}
 			}()
 
-			store := storage.NewSQLiteAuthStore(engine.DB())
+			store := storage.NewSQLiteAuthStore(engine)
 			now := time.Now().UTC()
 			u := &auth.User{
 				Username:           username,
@@ -163,7 +163,7 @@ func userListCmd() *cobra.Command {
 				}
 			}()
 
-			store := storage.NewSQLiteAuthStore(engine.DB())
+			store := storage.NewSQLiteAuthStore(engine)
 			users, err := store.ListUsers(ctx)
 			if err != nil {
 				return fmt.Errorf("listing users: %w", err)
@@ -215,7 +215,7 @@ func userPasswdCmd() *cobra.Command {
 				}
 			}()
 
-			store := storage.NewSQLiteAuthStore(engine.DB())
+			store := storage.NewSQLiteAuthStore(engine)
 			if err := store.UpdatePassword(ctx, username, hash); err != nil {
 				return err
 			}
@@ -298,7 +298,7 @@ func userDeleteCmd() *cobra.Command {
 				}
 			}()
 
-			store := storage.NewSQLiteAuthStore(engine.DB())
+			store := storage.NewSQLiteAuthStore(engine)
 			if err := store.DeleteUser(ctx, username); err != nil {
 				return err
 			}

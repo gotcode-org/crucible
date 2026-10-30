@@ -21,8 +21,8 @@ type SQLiteAuthStore struct {
 }
 
 // NewSQLiteAuthStore creates an auth persistence adapter backed by SQLite.
-func NewSQLiteAuthStore(db *sql.DB) *SQLiteAuthStore {
-	return &SQLiteAuthStore{db: db}
+func NewSQLiteAuthStore(adapter *SQLiteAdapter) *SQLiteAuthStore {
+	return &SQLiteAuthStore{db: adapter.db}
 }
 
 // CreateUser registers a new persistent user in SQLite.

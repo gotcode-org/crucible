@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -74,7 +75,19 @@ func NewSQLiteAdapterPath(
 		busyTimeoutMs = 5000
 	}
 
-	sqlDB, err := sql.Open("sqlite", cleanPath)
+	dsn := cleanPath
+	if cleanPath != ":memory:" {
+		params := url.Values{}
+		params.Add("_pragma", fmt.Sprintf("busy_timeout=%d", busyTimeoutMs))
+		params.Add("_pragma", "foreign_keys=ON")
+		separator := "?"
+		if strings.Contains(dsn, "?") {
+			separator = "&"
+		}
+		dsn += separator + params.Encode()
+	}
+
+	sqlDB, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf(
 			"opening SQLite database at %s: %w",
@@ -145,11 +158,6 @@ func (a *SQLiteAdapter) Path() string {
 	return a.path
 }
 
-// DB returns the underlying standard library *sql.DB pool.
-func (a *SQLiteAdapter) DB() *sql.DB {
-	return a.db
-}
-
 // Ping checks connectivity to the SQLite database.
 func (a *SQLiteAdapter) Ping(ctx context.Context) error {
 	return a.db.PingContext(ctx)
@@ -160,8 +168,8 @@ func (a *SQLiteAdapter) Close() error {
 	return a.db.Close()
 }
 
-// WithinTransaction executes a callback within an isolated transaction.
-func (a *SQLiteAdapter) WithinTransaction(
+// withinTransaction executes a callback within an isolated transaction.
+func (a *SQLiteAdapter) withinTransaction(
 	ctx context.Context,
 	fn func(tx *sql.Tx) error,
 ) error {
@@ -308,7 +316,7 @@ func (a *SQLiteAdapter) applyMigrationScript(
 	name string,
 	sqlScript string,
 ) error {
-	return a.WithinTransaction(ctx, func(tx *sql.Tx) error {
+	return a.withinTransaction(ctx, func(tx *sql.Tx) error {
 		if _, err := tx.ExecContext(ctx, sqlScript); err != nil {
 			return fmt.Errorf("executing migration script: %w", err)
 		}

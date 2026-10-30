@@ -7,7 +7,14 @@ package tokens
 import (
 	"context"
 	"time"
+
+	"gotcode.org/crucible/internal/auth"
 )
+
+// UserLookup defines the minimum user query required to create a token.
+type UserLookup interface {
+	GetUser(ctx context.Context, username string) (*auth.User, error)
+}
 
 // TokenStore defines the outbound SPI persistence port for Personal Access
 // Tokens. Implementations interact with the underlying database without

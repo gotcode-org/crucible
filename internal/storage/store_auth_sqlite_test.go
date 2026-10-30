@@ -6,46 +6,37 @@ package storage
 
 import (
 	"context"
-	"database/sql"
 	"errors"
-	"os"
-	"path/filepath"
 	"testing"
 	"time"
 
 	"gotcode.org/crucible/internal/auth"
-	_ "modernc.org/sqlite"
 )
 
-func setupTestSQLiteAuthStore(t *testing.T) (*sql.DB, *SQLiteAuthStore) {
+func setupTestSQLiteAuthStore(
+	t *testing.T,
+) (*SQLiteAdapter, *SQLiteAuthStore) {
 	t.Helper()
-	db, err := sql.Open("sqlite", ":memory:")
+	adapter, err := NewSQLiteAdapterPath(
+		context.Background(),
+		":memory:",
+		false,
+		5000,
+	)
 	if err != nil {
-		t.Fatalf("opening in-memory sqlite db: %v", err)
+		t.Fatalf("opening in-memory sqlite adapter: %v", err)
 	}
 	t.Cleanup(func() {
-		if closeErr := db.Close(); closeErr != nil {
-			t.Logf("closing test db: %v", closeErr)
+		if closeErr := adapter.Close(); closeErr != nil {
+			t.Logf("closing test adapter: %v", closeErr)
 		}
 	})
-
-	for _, f := range []string{
-		"001_initial.sql",
-		"004_sqlite_users.sql",
-		"005_password_lifecycle.sql",
-	} {
-		schemaPath := filepath.Join("schema", f)
-		schemaSQL, err := os.ReadFile(schemaPath)
-		if err != nil {
-			t.Fatalf("reading schema file %s: %v", schemaPath, err)
-		}
-		if _, err := db.Exec(string(schemaSQL)); err != nil {
-			t.Fatalf("applying schema %s: %v", f, err)
-		}
+	if err := adapter.Migrate(context.Background()); err != nil {
+		t.Fatalf("running migrations: %v", err)
 	}
 
-	store := NewSQLiteAuthStore(db)
-	return db, store
+	store := NewSQLiteAuthStore(adapter)
+	return adapter, store
 }
 
 func TestSQLiteAuthenticator_Authenticate(t *testing.T) {
