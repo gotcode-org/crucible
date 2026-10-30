@@ -17,6 +17,7 @@ import (
 	_ "modernc.org/sqlite"
 
 	"gotcode.org/crucible/internal/auth"
+	"gotcode.org/crucible/internal/storage"
 	"gotcode.org/crucible/internal/tokens"
 )
 
@@ -109,7 +110,7 @@ func TestTokenService_CreateAndValidate(t *testing.T) {
 		}
 	}()
 
-	store := tokens.NewSQLiteStore(db)
+	store := storage.NewSQLiteTokenStore(db)
 	svc := tokens.NewTokenService(store)
 	ctx := context.Background()
 
@@ -166,7 +167,7 @@ func TestTokenService_Revocation(t *testing.T) {
 		}
 	}()
 
-	store := tokens.NewSQLiteStore(db)
+	store := storage.NewSQLiteTokenStore(db)
 	svc := tokens.NewTokenService(store)
 	ctx := context.Background()
 
@@ -205,7 +206,7 @@ func TestTokenService_Expiration(t *testing.T) {
 		}
 	}()
 
-	store := tokens.NewSQLiteStore(db)
+	store := storage.NewSQLiteTokenStore(db)
 	svc := tokens.NewTokenService(store)
 	ctx := context.Background()
 
@@ -247,7 +248,7 @@ func TestTokenService_Concurrency(t *testing.T) {
 		}
 	}()
 
-	store := tokens.NewSQLiteStore(db)
+	store := storage.NewSQLiteTokenStore(db)
 	svc := tokens.NewTokenService(store)
 	ctx := context.Background()
 

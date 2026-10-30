@@ -17,14 +17,16 @@ Crucible exposes a RESTful JSON API alongside its embedded web console:
 
 ### Authentication & Authorization Models
 1. **Local UNIX Domain Socket (`/run/crucibled/crucible.sock`, mode `0660`)**:
-   - Zero-credential authorization. Access is secured by POSIX filesystem
-     permissions (`crucible` system group). Local operators running CLI
-     commands inherit administrative privileges automatically without tokens.
+   - Intentional local-admin trust boundary. Filesystem ownership and mode
+     restrict which local administrators can connect; authorized local
+     callers may administer the daemon without a PAT or browser login.
 2. **Cookie Session (`crucible_session`)**:
    - `HttpOnly`, `SameSite=Strict`, secure cookie issued upon successful
      login or 2FA verification.
 3. **Bearer Token (`Authorization: Bearer <token>`)**:
-   - Strictly required for remote TCP HTTP/HTTPS requests.
+   - Required for remote TCP HTTP/HTTPS requests that do not carry an
+     authenticated browser session. Local socket requests use the protected
+     local-admin trust boundary described above.
    - Supports Personal Access Tokens (`cb_pat_...`) hashed with SHA-256
      at rest, with granular role enforcement and expiration telemetry.
 

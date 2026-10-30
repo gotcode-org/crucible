@@ -549,3 +549,164 @@ must be **inherently terminal-friendly**:
   tables, layout borders, and status badges, while gracefully respecting
   non-TTY environments (`NO_COLOR`, piped outputs).
 
+---
+
+## 8. AI Collaboration, Scope Control & Session Continuity
+
+These rules apply to every AI coding agent and automated assistant working in
+this repository. They supplement the technical and contribution rules above;
+they do not replace or weaken them.
+
+### 8.1 Read Before Acting
+
+Before substantive work, the agent MUST:
+
+1. Read this file and every applicable nested `AGENTS.md`.
+2. Read `CONTRIBUTING.md`, `CONTEXT.md`, `docs/AI-HANDOFF.md` (if present),
+   and the relevant parts of `ARCHITECTURE.md`, `docs/ROADMAP.md`,
+   `docs/DECISIONS/README.md`, and the applicable accepted or proposed ADRs.
+   Also inspect the relevant parts of `PLAN.md`, `TODO`, and
+   `recommendations.md`.
+3. Inspect the current branch, HEAD, working-tree status, and relevant recent
+   history. Do not assume a previous session's branch or baseline is current.
+4. Inspect the actual implementation and tests relevant to the requested task.
+5. State its understanding of the task, scope, constraints, and intended
+   verification before making material changes.
+
+Do not overwrite, discard, stage, or reformat pre-existing user changes. If the
+working tree contains unrelated or unexplained changes, preserve them and
+clarify before proceeding where they could be affected.
+
+### 8.2 Architecture, Requirements & Decision Discipline
+
+- Treat the project owner's explicit, current decisions as authoritative.
+- Treat `CONTEXT.md` as the maintained record of confirmed product and
+  architecture intent, while remembering that it may become stale.
+- Treat the current source code, tests, migrations, and configuration as
+  evidence of what is actually implemented—not proof that every existing
+  implementation choice is intentional or correct.
+- Treat `docs/ROADMAP.md` as the strategic, outcome-oriented roadmap
+  when present. It does not replace the task-level `TODO` checklist or the
+  detailed technical blueprint in `PLAN.md`.
+- Treat `docs/DECISIONS/README.md` and applicable ADRs as the record of
+  architectural decisions and their status. A Proposed ADR is not an accepted
+  decision; implementation status must still be verified in code and tests.
+- Treat `PLAN.md` and `TODO` as detailed planning/backlog sources, subject
+  to owner approval and reconciliation with the strategic roadmap.
+- Treat `recommendations.md` as review advice, not approved requirements or
+  authorization to implement.
+- Do not convert an observation, suggestion, inferred requirement, or
+  architectural preference into a project decision without the owner's
+  approval.
+- Do not invent APIs, domain behavior, acceptance criteria, dependencies, or
+  compatibility guarantees. Ask one focused clarification when ambiguity
+  materially affects correctness.
+- Preserve the agreed modular-monolith direction, Hexagonal Architecture
+  (Ports & Adapters), and CQRS. Keep business rules in the appropriate
+  application/domain code; keep infrastructure behind adapters; wire concrete
+  dependencies at composition roots. The CLI and web UI are clients of shared
+  daemon application/API capabilities, not duplicate business-logic layers.
+- Prefer the smallest change that solves the approved task. Do not perform
+  broad reorganizations, speculative abstractions, or unrelated cleanup.
+- If these instructions, `CONTEXT.md`, the roadmap, recommendations, and
+  current code appear to conflict, do not silently choose a side. Describe the
+  exact conflict, its impact, and the available options; request owner
+  direction before making an architectural change.
+- In particular, the existing flat package-by-feature constraints above must
+  be interpreted consistently with the confirmed Hexagonal/CQRS boundaries.
+  Do not introduce or prohibit package structures solely to satisfy a diagram.
+  Resolve any concrete conflict with the owner before reorganizing packages.
+
+### 8.3 Recommendations & Review Findings
+
+Before implementing an item from `recommendations.md`:
+
+1. Revalidate the finding against the current branch and HEAD.
+2. Identify the exact code paths, interfaces, tests, and runtime assumptions
+   involved.
+3. Explain the proposed change and any alternatives or architectural tradeoffs.
+4. Define observable acceptance criteria and the tests needed to establish
+   them.
+5. Obtain the owner's approval for the implementation scope.
+
+Priority labels (P0/P1/P2/P3) communicate review urgency; they are not
+permission to implement. A recommendation may be obsolete, partially resolved,
+or invalidated by later work. Update the recommendation's status only when the
+repository evidence supports doing so, and record why.
+
+### 8.4 Required Session Handoff: `docs/AI-HANDOFF.md`
+
+`docs/AI-HANDOFF.md` is the concise, durable handoff between development
+sessions and AI assistants. It complements rather than replaces
+`CONTEXT.md`:
+
+- `CONTEXT.md`: relatively stable product identity, confirmed architecture,
+  and important historical review context.
+- `recommendations.md`: review findings and proposed improvements, not
+  automatically approved work.
+- `docs/AI-HANDOFF.md`: current, changing implementation status and the
+  exact point from which the next session should continue.
+
+At the beginning of substantive work, read the handoff and verify its claims
+against the current repository. At the end of every meaningful task or work
+session, update it before reporting completion. Also update it when an
+important decision is made, even if no code changes occur.
+
+The handoff MUST record, as applicable:
+
+- Last updated date/time and timezone.
+- Repository identity and whether the inspected checkout is the primary
+  repository or a mirror.
+- Current branch, HEAD commit, and working-tree state; identify uncommitted
+  changes without claiming ownership of unrelated changes.
+- Active objective and the scope approved by the owner.
+- Completed work and meaningful files added, changed, or removed, with a
+  concise explanation of why.
+- Commands, tests, linters, builds, and checks actually run, with exact
+  outcomes. Explicitly list checks not run and why.
+- Decisions made, who/what authorized them, and rationale; distinguish
+  confirmed decisions from proposals and assumptions.
+- Known defects, failed checks, blockers, risks, and unanswered questions.
+- The next agreed task, its boundaries, and any required owner decision.
+- Relevant links or references to plans, recommendations, commits, and
+  reviews where useful.
+
+Handoff quality rules:
+
+- Verify branch, commit, and status immediately before recording them. If they
+  cannot be verified, write `unknown / not verified`; never guess.
+- Distinguish `implemented`, `verified`, `planned`, `proposed`, and
+  `unknown`. Do not describe planned work as implemented or successful tests
+  as passing unless they were run.
+- Record failures and incomplete work; do not remove unresolved items merely
+  because a session ended.
+- Preserve prior decisions. If a decision changes, record the new decision,
+  its authority and rationale, and whether the previous decision is superseded.
+- Keep the file concise and actionable. It is a handoff, not a transcript,
+  activity diary, or duplicate of the full roadmap.
+- Never include credentials, tokens, private keys, secrets, personal data, or
+  sensitive environment values.
+- Do not claim that a handoff update itself verifies code correctness.
+
+If the handoff does not exist, create it from verified repository evidence and
+clearly mark unknowns. Do not fill gaps with plausible-sounding guesses.
+
+### 8.5 End-of-Task Report
+
+Before declaring a task complete, the agent MUST:
+
+1. Review the diff and confirm every changed file belongs to the approved scope.
+2. Run the relevant focused tests and any broader checks required by the
+   repository/task; report exact commands and results.
+3. Report checks that were not run, including the reason.
+4. Update `docs/AI-HANDOFF.md` with verified state, changes, decisions, and
+   remaining work.
+5. Summarize the implementation, files changed, test evidence, known risks,
+   and next step to the owner.
+6. Leave all commit, tag, and push actions subject to the explicit approval
+   guardrails in this file. Do not treat approval to implement as approval to
+   commit, tag, or push.
+
+When no code changes are made (for example, an investigation or planning
+session), update the handoff only if verified project state, a decision,
+unresolved issue, or next step materially changed.

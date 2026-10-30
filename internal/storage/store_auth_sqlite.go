@@ -2,7 +2,7 @@
 // Copyright (c) 2026 The GotCode Collective
 // See the LICENSE file in the project root for full license details.
 
-package auth
+package storage
 
 import (
 	"context"
@@ -11,21 +11,22 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"gotcode.org/crucible/internal/auth"
 )
 
-// SQLiteStore implements DeviceStore, SessionStore, ChallengeStore,
-// InviteStore, and UserStore on top of modernc.org/sqlite database pool.
-type SQLiteStore struct {
+// SQLiteAuthStore implements auth persistence ports on top of SQLite.
+type SQLiteAuthStore struct {
 	db *sql.DB
 }
 
-// NewSQLiteStore creates an auth persistence adapter backed by SQLite.
-func NewSQLiteStore(db *sql.DB) *SQLiteStore {
-	return &SQLiteStore{db: db}
+// NewSQLiteAuthStore creates an auth persistence adapter backed by SQLite.
+func NewSQLiteAuthStore(db *sql.DB) *SQLiteAuthStore {
+	return &SQLiteAuthStore{db: db}
 }
 
 // CreateUser registers a new persistent user in SQLite.
-func (s *SQLiteStore) CreateUser(ctx context.Context, u *User) error {
+func (s *SQLiteAuthStore) CreateUser(ctx context.Context, u *auth.User) error {
 	var roleOverrideStr *string
 	if u.RoleOverride != nil {
 		str := string(*u.RoleOverride)
@@ -34,7 +35,7 @@ func (s *SQLiteStore) CreateUser(ctx context.Context, u *User) error {
 
 	role := string(u.Role)
 	if role == "" {
-		role = string(RoleViewer)
+		role = string(auth.RoleViewer)
 	}
 
 	isActive := 1
@@ -77,7 +78,7 @@ INSERT INTO users (
 	)
 	if err != nil {
 		if strings.Contains(strings.ToLower(err.Error()), "unique") {
-			return ErrUserExists
+			return auth.ErrUserExists
 		}
 		return fmt.Errorf("creating user %s: %w", u.Username, err)
 	}
@@ -85,7 +86,7 @@ INSERT INTO users (
 }
 
 // UpdateUser updates user role, role override, and active status in SQLite.
-func (s *SQLiteStore) UpdateUser(ctx context.Context, u *User) error {
+func (s *SQLiteAuthStore) UpdateUser(ctx context.Context, u *auth.User) error {
 	var roleOverrideStr *string
 	if u.RoleOverride != nil {
 		str := string(*u.RoleOverride)
@@ -122,7 +123,7 @@ WHERE username = ?`
 
 	rows, rErr := res.RowsAffected()
 	if rErr == nil && rows == 0 {
-		return ErrUserNotFound
+		return auth.ErrUserNotFound
 	}
 	return nil
 }
@@ -130,7 +131,7 @@ WHERE username = ?`
 // UpdatePassword updates the Argon2id password hash for a user, resetting
 // the must_change_password flag and refreshing the password_changed_at
 // timestamp.
-func (s *SQLiteStore) UpdatePassword(
+func (s *SQLiteAuthStore) UpdatePassword(
 	ctx context.Context,
 	username, passwordHash string,
 ) error {
@@ -145,13 +146,13 @@ WHERE username = ?`
 	}
 	rows, rErr := res.RowsAffected()
 	if rErr == nil && rows == 0 {
-		return ErrUserNotFound
+		return auth.ErrUserNotFound
 	}
 	return nil
 }
 
 // SetMustChangePassword updates the must_change_password flag in SQLite.
-func (s *SQLiteStore) SetMustChangePassword(
+func (s *SQLiteAuthStore) SetMustChangePassword(
 	ctx context.Context,
 	username string,
 	mustChange bool,
@@ -171,13 +172,13 @@ func (s *SQLiteStore) SetMustChangePassword(
 	}
 	rows, rErr := res.RowsAffected()
 	if rErr == nil && rows == 0 {
-		return ErrUserNotFound
+		return auth.ErrUserNotFound
 	}
 	return nil
 }
 
 // DeleteUser removes a user record and cascades deletions in SQLite.
-func (s *SQLiteStore) DeleteUser(ctx context.Context, username string) error {
+func (s *SQLiteAuthStore) DeleteUser(ctx context.Context, username string) error {
 	query := `DELETE FROM users WHERE username = ?`
 	res, err := s.db.ExecContext(ctx, query, username)
 	if err != nil {
@@ -185,7 +186,7 @@ func (s *SQLiteStore) DeleteUser(ctx context.Context, username string) error {
 	}
 	rows, rErr := res.RowsAffected()
 	if rErr == nil && rows == 0 {
-		return ErrUserNotFound
+		return auth.ErrUserNotFound
 	}
 	return nil
 }
@@ -202,8 +203,8 @@ type userRowScan struct {
 	lastLoginStr  sql.NullString
 }
 
-func (r *userRowScan) toUser() User {
-	u := User{
+func (r *userRowScan) toUser() auth.User {
+	u := auth.User{
 		Username:           r.uname,
 		IsActive:           r.isActiveInt == 1,
 		MustChangePassword: r.mustChangeInt == 1,
@@ -219,12 +220,12 @@ func (r *userRowScan) toUser() User {
 		u.PasswordHash = &h
 	}
 	if r.roleStr.Valid && r.roleStr.String != "" {
-		u.Role = Role(r.roleStr.String)
+		u.Role = auth.Role(r.roleStr.String)
 	} else {
-		u.Role = RoleViewer
+		u.Role = auth.RoleViewer
 	}
 	if r.roleOverride.Valid && r.roleOverride.String != "" {
-		ro := Role(r.roleOverride.String)
+		ro := auth.Role(r.roleOverride.String)
 		u.RoleOverride = &ro
 	}
 	if r.lastLoginStr.Valid && r.lastLoginStr.String != "" {
@@ -235,7 +236,7 @@ func (r *userRowScan) toUser() User {
 }
 
 // ListUsers returns all persistent users ordered alphabetically.
-func (s *SQLiteStore) ListUsers(ctx context.Context) ([]User, error) {
+func (s *SQLiteAuthStore) ListUsers(ctx context.Context) ([]auth.User, error) {
 	query := `
 SELECT username, password_hash, role, role_override, is_active,
        must_change_password, password_changed_at, created_at, last_login
@@ -252,7 +253,7 @@ ORDER BY username ASC`
 		}
 	}()
 
-	var users []User
+	var users []auth.User
 	for rows.Next() {
 		var row userRowScan
 		if sErr := rows.Scan(
@@ -279,7 +280,7 @@ ORDER BY username ASC`
 }
 
 // CountUsers returns the total count of registered users in SQLite.
-func (s *SQLiteStore) CountUsers(ctx context.Context) (int, error) {
+func (s *SQLiteAuthStore) CountUsers(ctx context.Context) (int, error) {
 	var count int
 	query := `SELECT COUNT(*) FROM users`
 	if err := s.db.QueryRowContext(ctx, query).Scan(&count); err != nil {
@@ -289,7 +290,7 @@ func (s *SQLiteStore) CountUsers(ctx context.Context) (int, error) {
 }
 
 // UpsertUser inserts or updates user role override metadata.
-func (s *SQLiteStore) UpsertUser(ctx context.Context, u *User) error {
+func (s *SQLiteAuthStore) UpsertUser(ctx context.Context, u *auth.User) error {
 	var roleOverrideStr *string
 	if u.RoleOverride != nil {
 		str := string(*u.RoleOverride)
@@ -304,7 +305,7 @@ func (s *SQLiteStore) UpsertUser(ctx context.Context, u *User) error {
 
 	role := string(u.Role)
 	if role == "" {
-		role = string(RoleViewer)
+		role = string(auth.RoleViewer)
 	}
 
 	isActive := 1
@@ -361,10 +362,10 @@ ON CONFLICT(username) DO UPDATE SET
 }
 
 // GetUser retrieves persistent user record and role override from SQLite.
-func (s *SQLiteStore) GetUser(
+func (s *SQLiteAuthStore) GetUser(
 	ctx context.Context,
 	username string,
-) (*User, error) {
+) (*auth.User, error) {
 	query := `
 SELECT username, password_hash, role, role_override, is_active,
        must_change_password, password_changed_at, created_at, last_login
@@ -385,7 +386,7 @@ WHERE username = ?`
 	)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return nil, ErrUserNotFound
+			return nil, auth.ErrUserNotFound
 		}
 		return nil, fmt.Errorf("querying user %s: %w", username, err)
 	}
@@ -395,7 +396,7 @@ WHERE username = ?`
 }
 
 // TouchUserLogin updates the user's last login timestamp.
-func (s *SQLiteStore) TouchUserLogin(
+func (s *SQLiteAuthStore) TouchUserLogin(
 	ctx context.Context,
 	username string,
 	at time.Time,
@@ -414,9 +415,9 @@ ON CONFLICT(username) DO UPDATE SET last_login = excluded.last_login`
 }
 
 // CreateDevice registers a new 2FA authenticator device.
-func (s *SQLiteStore) CreateDevice(
+func (s *SQLiteAuthStore) CreateDevice(
 	ctx context.Context,
-	dev *TOTPDevice,
+	dev *auth.TOTPDevice,
 ) error {
 	// Satisfy foreign key constraint on users table
 	nowStr := time.Now().UTC().Format(time.RFC3339)
@@ -467,17 +468,17 @@ INSERT INTO user_totp_devices (
 }
 
 // GetDevice retrieves an enrolled TOTP device by its unique ID.
-func (s *SQLiteStore) GetDevice(
+func (s *SQLiteAuthStore) GetDevice(
 	ctx context.Context,
 	id string,
-) (*TOTPDevice, error) {
+) (*auth.TOTPDevice, error) {
 	query := `
 SELECT id, username, name, secret_key, created_at, last_used_at, enabled
 FROM user_totp_devices
 WHERE id = ?`
 
 	var (
-		dev         TOTPDevice
+		dev         auth.TOTPDevice
 		createdAt   string
 		lastUsedStr sql.NullString
 		enabledInt  int
@@ -494,7 +495,7 @@ WHERE id = ?`
 	)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return nil, ErrDeviceNotFound
+			return nil, auth.ErrDeviceNotFound
 		}
 		return nil, fmt.Errorf("querying device %s: %w", id, err)
 	}
@@ -510,10 +511,10 @@ WHERE id = ?`
 }
 
 // ListUserDevices returns all active enrolled devices for a user.
-func (s *SQLiteStore) ListUserDevices(
+func (s *SQLiteAuthStore) ListUserDevices(
 	ctx context.Context,
 	username string,
-) ([]TOTPDevice, error) {
+) ([]auth.TOTPDevice, error) {
 	query := `
 SELECT id, username, name, secret_key, created_at, last_used_at, enabled
 FROM user_totp_devices
@@ -530,10 +531,10 @@ ORDER BY created_at ASC`
 		}
 	}()
 
-	var devices []TOTPDevice
+	var devices []auth.TOTPDevice
 	for rows.Next() {
 		var (
-			dev         TOTPDevice
+			dev         auth.TOTPDevice
 			createdAt   string
 			lastUsedStr sql.NullString
 			enabledInt  int
@@ -562,7 +563,7 @@ ORDER BY created_at ASC`
 }
 
 // RevokeDevice disables or removes an enrolled device.
-func (s *SQLiteStore) RevokeDevice(
+func (s *SQLiteAuthStore) RevokeDevice(
 	ctx context.Context,
 	id, username string,
 ) error {
@@ -580,13 +581,13 @@ WHERE id = ? AND username = ? AND enabled = 1`
 		return fmt.Errorf("checking revoke rows affected: %w", err)
 	}
 	if rows == 0 {
-		return ErrDeviceNotFound
+		return auth.ErrDeviceNotFound
 	}
 	return nil
 }
 
 // TouchDevice updates the last used timestamp on an enrolled device.
-func (s *SQLiteStore) TouchDevice(
+func (s *SQLiteAuthStore) TouchDevice(
 	ctx context.Context,
 	id string,
 	at time.Time,
@@ -606,15 +607,15 @@ WHERE id = ?`
 		return fmt.Errorf("checking touch rows affected: %w", err)
 	}
 	if rows == 0 {
-		return ErrDeviceNotFound
+		return auth.ErrDeviceNotFound
 	}
 	return nil
 }
 
 // CreateSession persists an active user session in SQLite.
-func (s *SQLiteStore) CreateSession(
+func (s *SQLiteAuthStore) CreateSession(
 	ctx context.Context,
-	sess *Session,
+	sess *auth.Session,
 ) error {
 	// Satisfy foreign key constraint on users table
 	nowStr := time.Now().UTC().Format(time.RFC3339)
@@ -651,17 +652,17 @@ VALUES (?, ?, ?, ?, ?)`
 }
 
 // GetSession retrieves an active session by its unique ID.
-func (s *SQLiteStore) GetSession(
+func (s *SQLiteAuthStore) GetSession(
 	ctx context.Context,
 	id string,
-) (*Session, error) {
+) (*auth.Session, error) {
 	query := `
 SELECT id, username, role, created_at, expires_at
 FROM sessions
 WHERE id = ?`
 
 	var (
-		sess      Session
+		sess      auth.Session
 		roleStr   string
 		createdAt string
 		expiresAt string
@@ -676,12 +677,12 @@ WHERE id = ?`
 	)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return nil, ErrSessionExpired
+			return nil, auth.ErrSessionExpired
 		}
 		return nil, fmt.Errorf("querying session %s: %w", id, err)
 	}
 
-	sess.Role = Role(roleStr)
+	sess.Role = auth.Role(roleStr)
 	sess.CreatedAt = parseSQLiteTime(createdAt)
 	sess.ExpiresAt = parseSQLiteTime(expiresAt)
 
@@ -689,14 +690,14 @@ WHERE id = ?`
 		if rErr := s.RevokeSession(ctx, id); rErr != nil {
 			_ = rErr
 		}
-		return nil, ErrSessionExpired
+		return nil, auth.ErrSessionExpired
 	}
 
 	return &sess, nil
 }
 
 // RevokeSession invalidates and deletes an active session.
-func (s *SQLiteStore) RevokeSession(ctx context.Context, id string) error {
+func (s *SQLiteAuthStore) RevokeSession(ctx context.Context, id string) error {
 	query := `DELETE FROM sessions WHERE id = ?`
 	if _, err := s.db.ExecContext(ctx, query, id); err != nil {
 		return fmt.Errorf("revoking session %s: %w", id, err)
@@ -705,9 +706,9 @@ func (s *SQLiteStore) RevokeSession(ctx context.Context, id string) error {
 }
 
 // CreateChallenge records an ephemeral pre-auth 2FA challenge token.
-func (s *SQLiteStore) CreateChallenge(
+func (s *SQLiteAuthStore) CreateChallenge(
 	ctx context.Context,
-	ch *Challenge,
+	ch *auth.Challenge,
 ) error {
 	query := `
 INSERT INTO auth_challenges (token, username, expires_at)
@@ -727,10 +728,10 @@ VALUES (?, ?, ?)`
 }
 
 // ConsumeChallenge retrieves and single-use consumes a challenge token.
-func (s *SQLiteStore) ConsumeChallenge(
+func (s *SQLiteAuthStore) ConsumeChallenge(
 	ctx context.Context,
 	token string,
-) (*Challenge, error) {
+) (*auth.Challenge, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, fmt.Errorf("beginning challenge transaction: %w", err)
@@ -748,7 +749,7 @@ FROM auth_challenges
 WHERE token = ?`
 
 	var (
-		ch        Challenge
+		ch        auth.Challenge
 		expiresAt string
 	)
 
@@ -759,7 +760,7 @@ WHERE token = ?`
 	)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return nil, ErrChallengeExpired
+			return nil, auth.ErrChallengeExpired
 		}
 		return nil, fmt.Errorf("querying challenge: %w", err)
 	}
@@ -775,16 +776,16 @@ WHERE token = ?`
 
 	ch.ExpiresAt = parseSQLiteTime(expiresAt)
 	if time.Now().UTC().After(ch.ExpiresAt) {
-		return nil, ErrChallengeExpired
+		return nil, auth.ErrChallengeExpired
 	}
 
 	return &ch, nil
 }
 
 // CreateInvite records a single-use onboarding invite.
-func (s *SQLiteStore) CreateInvite(
+func (s *SQLiteAuthStore) CreateInvite(
 	ctx context.Context,
-	inv *TOTPInvite,
+	inv *auth.TOTPInvite,
 ) error {
 	// Satisfy foreign key constraint on users table
 	nowStr := time.Now().UTC().Format(time.RFC3339)
@@ -824,17 +825,17 @@ INSERT INTO totp_invites (
 }
 
 // GetInvite retrieves invite metadata by token.
-func (s *SQLiteStore) GetInvite(
+func (s *SQLiteAuthStore) GetInvite(
 	ctx context.Context,
 	token string,
-) (*TOTPInvite, error) {
+) (*auth.TOTPInvite, error) {
 	query := `
 SELECT id, token, username, label, created_by, created_at, expires_at, used_at
 FROM totp_invites
 WHERE token = ?`
 
 	var (
-		inv       TOTPInvite
+		inv       auth.TOTPInvite
 		createdAt string
 		expiresAt string
 		usedAtStr sql.NullString
@@ -852,7 +853,7 @@ WHERE token = ?`
 	)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return nil, ErrInviteExpired
+			return nil, auth.ErrInviteExpired
 		}
 		return nil, fmt.Errorf("querying invite: %w", err)
 	}
@@ -865,17 +866,17 @@ WHERE token = ?`
 	}
 
 	if inv.UsedAt != nil {
-		return nil, ErrInviteAlreadyUsed
+		return nil, auth.ErrInviteAlreadyUsed
 	}
 	if time.Now().UTC().After(inv.ExpiresAt) {
-		return nil, ErrInviteExpired
+		return nil, auth.ErrInviteExpired
 	}
 
 	return &inv, nil
 }
 
 // ConsumeInvite marks an invite token as consumed.
-func (s *SQLiteStore) ConsumeInvite(
+func (s *SQLiteAuthStore) ConsumeInvite(
 	ctx context.Context,
 	id string,
 	at time.Time,
@@ -895,7 +896,7 @@ WHERE id = ? AND used_at IS NULL`
 		return fmt.Errorf("checking consume invite rows affected: %w", err)
 	}
 	if rows == 0 {
-		return ErrInviteAlreadyUsed
+		return auth.ErrInviteAlreadyUsed
 	}
 	return nil
 }

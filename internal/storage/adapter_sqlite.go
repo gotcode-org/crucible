@@ -27,17 +27,14 @@ import (
 //go:embed schema/*.sql
 var embeddedSQLiteSchemaFS embed.FS
 
-// SQLiteAdapter implements the Engine and Transactor ports for pure Go SQLite.
+// SQLiteAdapter implements the Engine port for pure Go SQLite.
 type SQLiteAdapter struct {
 	db   *sql.DB
 	path string
 }
 
-// Ensure SQLiteAdapter satisfies Engine and Transactor interfaces.
-var (
-	_ Engine     = (*SQLiteAdapter)(nil)
-	_ Transactor = (*SQLiteAdapter)(nil)
-)
+// Ensure SQLiteAdapter satisfies Engine.
+var _ Engine = (*SQLiteAdapter)(nil)
 
 // NewSQLiteAdapter constructs an SQLite engine adapter from StorageConfig.
 func NewSQLiteAdapter(

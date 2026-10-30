@@ -2,7 +2,7 @@
 // Copyright (c) 2026 The GotCode Collective
 // See the LICENSE file in the project root for full license details.
 
-package auth
+package storage
 
 import (
 	"context"
@@ -13,10 +13,11 @@ import (
 	"testing"
 	"time"
 
+	"gotcode.org/crucible/internal/auth"
 	_ "modernc.org/sqlite"
 )
 
-func setupTestSQLiteAuthStore(t *testing.T) (*sql.DB, *SQLiteStore) {
+func setupTestSQLiteAuthStore(t *testing.T) (*sql.DB, *SQLiteAuthStore) {
 	t.Helper()
 	db, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
@@ -33,7 +34,7 @@ func setupTestSQLiteAuthStore(t *testing.T) (*sql.DB, *SQLiteStore) {
 		"004_sqlite_users.sql",
 		"005_password_lifecycle.sql",
 	} {
-		schemaPath := filepath.Join("..", "storage", "schema", f)
+		schemaPath := filepath.Join("schema", f)
 		schemaSQL, err := os.ReadFile(schemaPath)
 		if err != nil {
 			t.Fatalf("reading schema file %s: %v", schemaPath, err)
@@ -43,7 +44,7 @@ func setupTestSQLiteAuthStore(t *testing.T) (*sql.DB, *SQLiteStore) {
 		}
 	}
 
-	store := NewSQLiteStore(db)
+	store := NewSQLiteAuthStore(db)
 	return db, store
 }
 
@@ -52,15 +53,15 @@ func TestSQLiteAuthenticator_Authenticate(t *testing.T) {
 	_, store := setupTestSQLiteAuthStore(t)
 	ctx := context.Background()
 
-	hash, hErr := HashPassword("SuperSecret123!")
+	hash, hErr := auth.HashPassword("SuperSecret123!")
 	if hErr != nil {
-		t.Fatalf("HashPassword error: %v", hErr)
+		t.Fatalf("auth.HashPassword error: %v", hErr)
 	}
 
-	u := &User{
+	u := &auth.User{
 		Username:     "alice",
 		PasswordHash: &hash,
-		Role:         RoleOperator,
+		Role:         auth.RoleOperator,
 		IsActive:     true,
 		CreatedAt:    time.Now().UTC(),
 	}
@@ -68,14 +69,14 @@ func TestSQLiteAuthenticator_Authenticate(t *testing.T) {
 		t.Fatalf("CreateUser error: %v", err)
 	}
 
-	auth := NewSQLiteAuthenticator(store)
+	authenticator := auth.NewSQLiteAuthenticator(store)
 
 	// Valid authentication
-	ident, err := auth.Authenticate(ctx, "alice", "SuperSecret123!")
+	ident, err := authenticator.Authenticate(ctx, "alice", "SuperSecret123!")
 	if err != nil {
 		t.Fatalf("Authenticate valid error: %v", err)
 	}
-	if ident.Username != "alice" || ident.Role != RoleOperator {
+	if ident.Username != "alice" || ident.Role != auth.RoleOperator {
 		t.Errorf("unexpected identity: %+v", ident)
 	}
 	if ident.Provider != "sqlite" {
@@ -83,45 +84,45 @@ func TestSQLiteAuthenticator_Authenticate(t *testing.T) {
 	}
 
 	// Wrong password
-	_, err = auth.Authenticate(ctx, "alice", "WrongPass")
-	if !errors.Is(err, ErrInvalidCredentials) {
-		t.Errorf("expected ErrInvalidCredentials for wrong pass, got: %v", err)
+	_, err = authenticator.Authenticate(ctx, "alice", "WrongPass")
+	if !errors.Is(err, auth.ErrInvalidCredentials) {
+		t.Errorf("expected auth.ErrInvalidCredentials for wrong pass, got: %v", err)
 	}
 
 	// Non-existent user
-	_, err = auth.Authenticate(ctx, "bob", "SuperSecret123!")
-	if !errors.Is(err, ErrInvalidCredentials) {
-		t.Errorf("expected ErrInvalidCredentials for missing user, got: %v", err)
+	_, err = authenticator.Authenticate(ctx, "bob", "SuperSecret123!")
+	if !errors.Is(err, auth.ErrInvalidCredentials) {
+		t.Errorf("expected auth.ErrInvalidCredentials for missing user, got: %v", err)
 	}
 
 	// Deactivated user
-	disabledUser := &User{
+	disabledUser := &auth.User{
 		Username:     "dave",
 		PasswordHash: &hash,
-		Role:         RoleOperator,
+		Role:         auth.RoleOperator,
 		IsActive:     false,
 		CreatedAt:    time.Now().UTC(),
 	}
 	if dErr := store.CreateUser(ctx, disabledUser); dErr != nil {
 		t.Fatalf("CreateUser dave error: %v", dErr)
 	}
-	_, err = auth.Authenticate(ctx, "dave", "SuperSecret123!")
-	if !errors.Is(err, ErrUserDisabled) {
-		t.Errorf("expected ErrUserDisabled, got: %v", err)
+	_, err = authenticator.Authenticate(ctx, "dave", "SuperSecret123!")
+	if !errors.Is(err, auth.ErrUserDisabled) {
+		t.Errorf("expected auth.ErrUserDisabled, got: %v", err)
 	}
 
 	// Role override
-	adminOverride := RoleAdmin
+	adminOverride := auth.RoleAdmin
 	u.RoleOverride = &adminOverride
 	if uErr := store.UpdateUser(ctx, u); uErr != nil {
 		t.Fatalf("UpdateUser error: %v", uErr)
 	}
-	ident, err = auth.Authenticate(ctx, "alice", "SuperSecret123!")
+	ident, err = authenticator.Authenticate(ctx, "alice", "SuperSecret123!")
 	if err != nil {
 		t.Fatalf("Authenticate with override error: %v", err)
 	}
-	if ident.Role != RoleAdmin {
-		t.Errorf("expected RoleAdmin from override, got: %s", ident.Role)
+	if ident.Role != auth.RoleAdmin {
+		t.Errorf("expected auth.RoleAdmin from override, got: %s", ident.Role)
 	}
 }
 
@@ -130,14 +131,14 @@ func TestSQLiteAuthenticator_ResolveRole(t *testing.T) {
 	_, store := setupTestSQLiteAuthStore(t)
 	ctx := context.Background()
 
-	hash, hErr := HashPassword("pass")
+	hash, hErr := auth.HashPassword("pass")
 	if hErr != nil {
-		t.Fatalf("HashPassword error: %v", hErr)
+		t.Fatalf("auth.HashPassword error: %v", hErr)
 	}
-	u := &User{
+	u := &auth.User{
 		Username:     "resolver_user",
 		PasswordHash: &hash,
-		Role:         RoleAdmin,
+		Role:         auth.RoleAdmin,
 		IsActive:     true,
 		CreatedAt:    time.Now().UTC(),
 	}
@@ -145,13 +146,13 @@ func TestSQLiteAuthenticator_ResolveRole(t *testing.T) {
 		t.Fatalf("CreateUser error: %v", err)
 	}
 
-	auth := NewSQLiteAuthenticator(store)
-	resRole, found := auth.ResolveRole(ctx, "resolver_user")
-	if !found || resRole != RoleAdmin {
-		t.Errorf("expected RoleAdmin, got %s (found: %v)", resRole, found)
+	authenticator := auth.NewSQLiteAuthenticator(store)
+	resRole, found := authenticator.ResolveRole(ctx, "resolver_user")
+	if !found || resRole != auth.RoleAdmin {
+		t.Errorf("expected auth.RoleAdmin, got %s (found: %v)", resRole, found)
 	}
 
-	_, missingFound := auth.ResolveRole(ctx, "nonexistent")
+	_, missingFound := authenticator.ResolveRole(ctx, "nonexistent")
 	if missingFound {
 		t.Errorf("expected false for nonexistent user")
 	}
@@ -167,23 +168,23 @@ func TestSQLiteStore_UserCRUD(t *testing.T) {
 		t.Fatalf("expected count 0, got %d, err: %v", count, cErr)
 	}
 
-	hash, hErr := HashPassword("pass1")
+	hash, hErr := auth.HashPassword("pass1")
 	if hErr != nil {
-		t.Fatalf("HashPassword error: %v", hErr)
+		t.Fatalf("auth.HashPassword error: %v", hErr)
 	}
-	u := &User{
+	u := &auth.User{
 		Username:     "carol",
 		PasswordHash: &hash,
-		Role:         RoleViewer,
+		Role:         auth.RoleViewer,
 		IsActive:     true,
 	}
 	if err := store.CreateUser(ctx, u); err != nil {
 		t.Fatalf("CreateUser error: %v", err)
 	}
 
-	// Duplicate create should return ErrUserExists
-	if err := store.CreateUser(ctx, u); !errors.Is(err, ErrUserExists) {
-		t.Errorf("expected ErrUserExists on duplicate create, got: %v", err)
+	// Duplicate create should return auth.ErrUserExists
+	if err := store.CreateUser(ctx, u); !errors.Is(err, auth.ErrUserExists) {
+		t.Errorf("expected auth.ErrUserExists on duplicate create, got: %v", err)
 	}
 
 	count, cErr = store.CountUsers(ctx)
@@ -196,8 +197,8 @@ func TestSQLiteStore_UserCRUD(t *testing.T) {
 		t.Fatalf("DeleteUser error: %v", err)
 	}
 	_, err := store.GetUser(ctx, "carol")
-	if !errors.Is(err, ErrUserNotFound) {
-		t.Errorf("expected ErrUserNotFound after delete, got: %v", err)
+	if !errors.Is(err, auth.ErrUserNotFound) {
+		t.Errorf("expected auth.ErrUserNotFound after delete, got: %v", err)
 	}
 }
 
@@ -206,14 +207,14 @@ func TestSQLiteStore_UserListAndUpdate(t *testing.T) {
 	_, store := setupTestSQLiteAuthStore(t)
 	ctx := context.Background()
 
-	hash, hErr := HashPassword("pass1")
+	hash, hErr := auth.HashPassword("pass1")
 	if hErr != nil {
-		t.Fatalf("HashPassword error: %v", hErr)
+		t.Fatalf("auth.HashPassword error: %v", hErr)
 	}
-	u := &User{
+	u := &auth.User{
 		Username:     "carol",
 		PasswordHash: &hash,
-		Role:         RoleViewer,
+		Role:         auth.RoleViewer,
 		IsActive:     true,
 	}
 	if err := store.CreateUser(ctx, u); err != nil {
@@ -229,14 +230,14 @@ func TestSQLiteStore_UserListAndUpdate(t *testing.T) {
 			lErr,
 		)
 	}
-	if users[0].Username != "carol" || users[0].Role != RoleViewer {
+	if users[0].Username != "carol" || users[0].Role != auth.RoleViewer {
 		t.Errorf("unexpected user in list: %+v", users[0])
 	}
 
 	// Update Password
-	newHash, nhErr := HashPassword("pass2")
+	newHash, nhErr := auth.HashPassword("pass2")
 	if nhErr != nil {
-		t.Fatalf("HashPassword pass2 error: %v", nhErr)
+		t.Fatalf("auth.HashPassword pass2 error: %v", nhErr)
 	}
 	if err := store.UpdatePassword(ctx, "carol", newHash); err != nil {
 		t.Fatalf("UpdatePassword error: %v", err)

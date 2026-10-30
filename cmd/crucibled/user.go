@@ -17,6 +17,7 @@ import (
 	"github.com/charmbracelet/x/term"
 	"github.com/spf13/cobra"
 	"gotcode.org/crucible/internal/auth"
+	"gotcode.org/crucible/internal/storage"
 	"gotcode.org/crucible/internal/ui"
 )
 
@@ -88,7 +89,7 @@ func userAddCmd() *cobra.Command {
 				}
 			}()
 
-			store := auth.NewSQLiteStore(engine.DB())
+			store := storage.NewSQLiteAuthStore(engine.DB())
 			now := time.Now().UTC()
 			u := &auth.User{
 				Username:           username,
@@ -162,7 +163,7 @@ func userListCmd() *cobra.Command {
 				}
 			}()
 
-			store := auth.NewSQLiteStore(engine.DB())
+			store := storage.NewSQLiteAuthStore(engine.DB())
 			users, err := store.ListUsers(ctx)
 			if err != nil {
 				return fmt.Errorf("listing users: %w", err)
@@ -214,7 +215,7 @@ func userPasswdCmd() *cobra.Command {
 				}
 			}()
 
-			store := auth.NewSQLiteStore(engine.DB())
+			store := storage.NewSQLiteAuthStore(engine.DB())
 			if err := store.UpdatePassword(ctx, username, hash); err != nil {
 				return err
 			}
@@ -297,7 +298,7 @@ func userDeleteCmd() *cobra.Command {
 				}
 			}()
 
-			store := auth.NewSQLiteStore(engine.DB())
+			store := storage.NewSQLiteAuthStore(engine.DB())
 			if err := store.DeleteUser(ctx, username); err != nil {
 				return err
 			}

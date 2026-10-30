@@ -56,13 +56,12 @@ Pi**, integrating cleanly with upstream Git repositories and notifications.
     Frankfurt) peer with each other over gRPC.
   * Pipeline configurations, schedules, active runs, and execution history are
     replicated automatically between servers.
-* **Strict "Exactly-Once" Distributed Execution (Distributed Leases &
-  Fencing):**
-  * When a scheduled job arrives, both servers know about it, but a
-    **distributed lease mechanism with fencing tokens** guarantees the job
-    executes **only once** across the cluster.
-  * If the executing server crashes mid-job, the lease expires and the peer
-    safely takes over without duplicate runs or split-brain.
+* **Failure-Aware Distributed Scheduling (Leases & Fencing):**
+  * Distributed leases and fencing prevent stale controllers from owning the
+    same scheduling slot under the documented quorum and failure assumptions.
+  * Recovery from a controller or worker crash must account for external work
+    that may still be running. Do not claim exactly-once external side effects
+    unless the protocol and tests establish that guarantee.
 * **Public Read-Only UI with Job-Level Visibility (Public vs. Private):**
   * **Standalone Public Portal (`/`)**: Unauthenticated visitors are served a
     clean, centered public build monitor (`public_runs.html`) without the
@@ -384,29 +383,21 @@ sharing credentials, Crucible implements a GitHub-style **Personal Access Token
 └─────────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
-### Dual Transport & Zero-Credential Local Socket Model
+### Dual Transport & Consistent Authorization
 
-Crucible enforces a two-tier transport security boundary:
-1. **Local UNIX Domain Socket (`/run/crucibled/crucible.sock`, mode `0660`)**:
-   * Security Boundary: Guarded by Linux kernel POSIX filesystem permissions
-     owned by `root:crucible` (or service user).
-   * Authorization: Connections arriving over the local UNIX domain socket
-     are intrinsically trusted and do not require PAT tokens or login
-     challenges, enabling frictionless local administration and root cron jobs.
-   * Client Auto-Discovery: `cruciblectl` automatically detects and prioritizes
-     the local socket if present and accessible on the filesystem.
-2. **Remote TCP / HTTPS Network Access (`http://` or `https://`)**:
-   * Security Boundary: Open network endpoints accessible across WAN or LAN.
-   * Authorization: Strictly authenticated via Personal Access Tokens (PATs)
-     passed in the `Authorization: Bearer cb_pat_...` header (or browser
-     session cookies for the web console).
-   * Enforcement: Every TCP request verifies token SHA-256 hash, revocation
-     status, expiration date, and role scopes, updating `last_used_at` and
-     `last_used_ip` telemetry.
+The daemon exposes the same management API through local UNIX domain socket
+and remote HTTP(S) transports. Local socket access is an intentional trust
+boundary: filesystem ownership and mode restrict the socket to administrators
+who already have authorized local/SSH access, and those callers may administer
+the server without a PAT or browser login. Remote TCP access requires normal
+API authentication. `cruciblectl` may discover and select the local socket;
+the daemon grants the documented local-admin principal only to requests
+arriving over that protected socket. Keep the socket path and permissions
+restrictive and document this distinction clearly.
 
 ---
 
-## 5. Peer Replication & "Exactly-Once" Distributed Execution
+## 5. Peer Replication & Failure-Aware Distributed Execution
 
 ```
 ┌──────────────────────────────────────┐                      ┌──────────────────────────────────────┐
@@ -2400,7 +2391,7 @@ CREATE TABLE IF NOT EXISTS api_tokens (
     FOREIGN KEY(username) REFERENCES users(username) ON DELETE CASCADE
 );
 
--- Distributed Cluster Leases (Guarantees Exactly-Once Job Execution)
+-- Distributed Cluster Leases (Fencing Under a Documented Failure Model)
 CREATE TABLE IF NOT EXISTS cluster_leases (
     slot_key      TEXT PRIMARY KEY,        -- SHA256(schedule_id + scheduled_timestamp)
     holder_node   TEXT NOT NULL,           -- Node ID holding the lock
@@ -2828,7 +2819,7 @@ views.
 │                                      ▼                                      │
 │  PHASE 3 (v0.3.0) — CLUSTER PEER HA & UPSTREAM GIT                          │
 │  • Multi-server peer replication over mTLS gRPC                             │
-│  • Distributed leases & fencing tokens for exactly-once scheduling          │
+│  • Distributed leases & fencing for safe scheduled execution                │
 │  • Upstream Git single source of truth & P2P commit broadcasting            │
 │  • NetBox dynamic inventory sync & Web Inventory/Variables Studio           │
 │                                      │                                      │
@@ -2853,6 +2844,13 @@ Phase 1 delivers a fully operational, sovereign automation platform
 capable of running as a single-node daemon on edge devices (Raspberry Pi)
 and Linux servers with zero external dependencies, complete with both an
 operator CLI and an embedded Web management console.
+
+**Feature development gate:** Complete Milestone 1-08a before starting the
+remaining Phase 1 feature milestones. Revalidate its source-level findings
+against the current checkout, then implement only confirmed boundary and
+correctness fixes. Keep the standalone SQLite product as this phase's target;
+do not introduce speculative database adapters, generic repositories, or
+distributed-runtime abstractions.
 
 #### Milestone 1-01: Build Tooling, Module Setup & Verification Pipeline [DONE]
 * Initialize Go module with `gotcode.org/crucible` targeting Go 1.24+.
@@ -3075,6 +3073,50 @@ operator CLI and an embedded Web management console.
   verify TCP requests fail with 401 without token, create token via CLI and
   Web UI, verify authentication and `last_used_at` telemetry updates.
 
+#### Milestone 1-08a: Existing-Code Architecture Stabilization
+
+Complete this milestone before beginning further feature work. Its scope is
+limited to recommendations confirmed in code that exists in this checkout.
+Future execution, streaming, worker, and multi-database design work is listed
+with the later milestones that implement those capabilities. Preserve
+feature-owned ports, composition-root wiring, and CQRS. Do not add speculative
+database adapters or a generic SQL dialect/repository framework.
+
+1. **Persistence boundary and adapter ownership:** Remove raw `*sql.DB` and
+   `*sql.Tx` from application-facing storage contracts. Define only the
+   database-independent transaction operations needed by confirmed use cases;
+   keep SQLite transaction mechanics in the adapter. Keep auth/token ports
+   owned by those features and move concrete SQLite persistence behind the
+   storage infrastructure boundary. Inject stores from daemon composition.
+2. **Explicit server composition:** Require core HTTP server collaborators
+   explicitly. Remove fallback construction of token/storage services from
+   inbound HTTP adapters; leave only transport and presentation defaults
+   optional.
+3. **Persistence invariants and startup safety:** Ensure token creation cannot
+   create an incomplete user record. Make first-admin setup atomic across
+   independent service instances sharing SQLite. Serialize or safely resolve
+   concurrent migration attempts. Add rollback and independent-connection
+   concurrency tests for applicable behavior.
+4. **SQLite configuration boundary:** Pass SQLite-specific options to the
+   adapter, with application configuration translated at the composition
+   root. Add no unused adapter knobs.
+5. **Current HTTP API safety:** Document auth and error behavior for existing
+   routes across remote TCP and the intentional local-admin socket trust
+   boundary. Bound inbound JSON request bodies and test the current handlers'
+   auth, validation, and error cases. Defer streaming lifecycle contracts to
+   the runner/log-stream milestone.
+6. **Verification:** Add focused tests for changed storage boundaries,
+   transaction rollback, setup races, migration races, and existing API
+   request limits/auth behavior. Run required repository checks before closing
+   this gate. Keep PostgreSQL/MySQL adapters deferred until their contracts
+   and owner approval exist.
+
+**Exit criteria:** Revalidate every source finding and record it as fixed,
+not applicable, or still open with rationale; implement and test confirmed
+fixes for the existing codebase and pass required checks. Future-feature
+contracts remain tracked at their respective milestones and do not block this
+gate.
+
 #### Milestone 1-09: Cryptographic Audit Ledger Subsystem (`internal/audit/`)
 * Define `AuditStore` outbound port in `internal/audit/ports.go` with zero
   database imports or SQL statements.
@@ -3123,6 +3165,15 @@ operator CLI and an embedded Web management console.
   sealed state on daemon restart, and unseal via CLI.
 
 #### Milestone 1-11: Local Runner & Zero-RAM Log Streaming (`internal/engine/`)
+Before implementing this milestone, define the future execution contract:
+separate a requested job from each execution attempt; specify legal state
+transitions, retries/backoff, timeout, cancellation, concurrency, crash
+recovery, and idempotency. Associate logs and reports with attempts and define
+visibility, retention, size limits, partial-output behavior, and disk-full
+handling. For live attachment, define authentication, reconnect/resume,
+cancellation, backpressure, and bounded resource use. These are prerequisites
+for the runner and streaming features, not findings in the current codebase.
+
 * Implement Python virtual environment detector and manager
   (`internal/engine/venv.go`).
 * Implement subprocess playbook runner (`internal/engine/exec_local.go`) using
@@ -3197,6 +3248,16 @@ Phase 2 scales Crucible from a standalone runner to a distributed multi-node
 fleet with remote worker execution daemons, robust maintenance controls, and
 dedicated worker management in both CLI and Web UI.
 
+#### Milestone 2-00: Worker Contract & Delivery Failure Model
+Before implementing the worker daemon, define registration and identity,
+capabilities, mTLS authentication and authorization, heartbeat cadence and
+failure thresholds, reconnect behavior, availability-state ownership,
+dispatch acknowledgement, duplicate delivery, cancellation, graceful drain,
+lease expiry, fencing, and partition recovery. Specify the delivery and
+recovery guarantee against external side effects. Start from at-least-once
+delivery with idempotent handling; claim stronger guarantees only when the
+failure model and tests establish them.
+
 #### Milestone 2-01: Remote Worker Daemon (`crucibled worker`)
 * Implement lightweight, zero-state remote worker execution daemon.
 * Establish secure dial-home mTLS gRPC connection from worker to controller.
@@ -3231,23 +3292,19 @@ dedicated worker management in both CLI and Web UI.
 * **Verification**: Drain worker via Web UI, verify CLI reflects `DRAIN` badge,
   verify in-flight tasks finish while new tasks are paused.
 
-#### Milestone 2-05: Storage Subsystem Centralization & Dialect Layer
-* Centralize all authentication persistence inside `internal/storage/`:
-  * Migrate `internal/auth/adapter_sqlite.go` into
-    `internal/storage/store_auth.go` satisfying `auth.UserStore`,
-    `auth.DeviceStore`, and `auth.SessionStore`.
-  * Ensure `internal/auth` contains zero SQL statements and zero database
-    driver imports.
-* Implement lightweight SQL dialect translator (`internal/storage/dialect.go`):
-  * Dynamic parameter placeholder re-binding (`?` for SQLite/MySQL vs `$1, $2`
-    for PostgreSQL).
-  * Dialect-aware upsert helpers (`INSERT OR REPLACE` vs `ON CONFLICT`).
-* Restructure raw schema migrations under `internal/storage/schema/` into
-  engine-specific migration directories (`schema/sqlite/`,
-  `schema/postgres/`, `schema/mysql/`).
-* **Verification**: Run entire test suite (`make all`) and confirm all auth,
-  device, session, and user tests pass with persistence hosted in
-  `internal/storage`.
+#### Milestone 2-05: Validate Storage Boundaries for Worker Persistence
+* Verify the Phase 1 storage stabilization work against worker registration,
+  heartbeat, and execution persistence requirements; add only the storage
+  operations needed by those use cases.
+* Keep feature-owned persistence ports and concrete database adapters behind
+  the storage infrastructure boundary.
+* Do not add a SQL dialect translator or split schema directories solely for
+  hypothetical databases. Revisit those choices when PostgreSQL/MySQL support
+  is approved and adapter-specific migration and transaction requirements are
+  known.
+* **Verification**: Run worker persistence and storage contract tests, along
+  with the repository's required checks. Confirm worker features do not depend
+  on raw database handles.
 
 #### Milestone 2-06: Release v0.2.0 Verification & Tagging
 * Verify drain lifecycle: drain worker, confirm zero new tasks dispatched,
@@ -3262,14 +3319,22 @@ dedicated worker management in both CLI and Web UI.
 Phase 3 introduces multi-controller high availability, state replication,
 upstream Git synchronization, and the Web Variables Studio.
 
+Before controller HA work, define state ownership and consistency, quorum and
+partition assumptions, lease acquisition/renewal/expiry, fencing-token
+monotonicity, stale-owner rejection, and recovery when an external worker may
+still be running. Select and document realistic delivery semantics; do not
+equate a lease with exactly-once external side effects.
+
 #### Milestone 3-01: Multi-Controller Peer Replication over mTLS gRPC
 * Implement peer-to-peer mesh connection manager (`internal/cluster/peer.go`).
 * Replicate active runs, schedules, and leases across controller peers.
 
 #### Milestone 3-02: Distributed Leases & Monotonic Fencing Tokens
 * Implement distributed lease manager in `internal/cluster/lease.go`.
-* Enforce "exactly-once" scheduled execution across peered controllers using
-  monotonic fencing tokens to prevent split-brain execution.
+* Implement durable lease transitions and monotonic fencing-token checks under
+  the delivery/failure semantics selected in Milestone 2-00. Do not promise
+  exactly-once external side effects based on leases alone; require idempotent
+  handling and document any narrower guarantee that can be proven.
 
 #### Milestone 3-03: Upstream Git as Single Source of Truth & P2P Broadcast
 * Implement Git working-tree synchronizer (`internal/git/`):
@@ -3305,8 +3370,8 @@ upstream Git synchronization, and the Web Variables Studio.
   variable precedence inspector, and atomic save & Git broadcast button.
 
 #### Milestone 3-06: Release v0.3.0 Verification & Tagging
-* Verify dual-controller cluster: schedule recurring job, confirm exactly-once
-  execution via fencing lease.
+* Verify dual-controller scheduling against the delivery guarantee selected in
+  Milestones 2-00 and 3-02, including stale-owner rejection and recovery.
 * Verify Git commit broadcast: push commit to Controller A, confirm
   Controller B pulls within 500ms.
 * Cut official mainline release tag `v0.3.0`.
@@ -3338,6 +3403,13 @@ Prometheus observability.
 
 Phase 5 hardens Crucible for mission-critical enterprise production
 deployments.
+
+#### Milestone 5-00: Reliability Objectives & Operational Readiness
+Define observable SLIs for API availability/latency, queue and dispatch delay,
+execution-start delay, worker availability, and completion/failure rates.
+Record workload assumptions and measurement windows before proposing numeric
+SLO targets. Specify data sources, alert policy, error-budget response, and
+operator runbooks; do not invent targets without a baseline.
 
 #### Milestone 5-01: Systemd Packaging & Multi-Distro Distribution
 * Package systemd units, tmpfiles.d rules, and logrotate configs.

@@ -170,6 +170,47 @@ Format: `[state] (Priority) [domain/binary] Task description @assignee +tag`
       one-click copy, and revocation @jovens@gotcode.org +phase1 +web +tokens
 - [x] (B) [docs] Document /api/v1/tokens REST endpoints in docs/api.md
       @jovens@gotcode.org +phase1 +docs
+- [x] (A) [shared] Revalidate architecture recommendations against current
+      code and tests; record each finding as confirmed, resolved, not
+      applicable, or open before implementation @jovens@gotcode.org +phase1
+      +architecture
+- [ ] (A) [storage] Remove raw database/sql DB and Tx types from
+      application-facing storage ports; define only transaction operations
+      required by current use cases and test rollback semantics
+      @jovens@gotcode.org +phase1 +storage +architecture
+- [ ] (A) [storage] Keep auth/token persistence ports feature-owned and
+      construct concrete SQLite adapters at daemon composition; remove raw
+      database handle access from application callers
+      @jovens@gotcode.org +phase1 +storage +architecture
+- [ ] (A) [server] Require core HTTP dependencies explicitly and remove
+      inbound-adapter fallback construction of storage and token services
+      @jovens@gotcode.org +phase1 +server +architecture
+- [ ] (A) [server] Bound all inbound JSON request bodies and reject oversized
+      payloads consistently; cover token and authentication endpoints
+      @jovens@gotcode.org +phase1 +server +security
+- [ ] (A) [tokens] Reject token creation for unknown users without creating
+      user rows; preserve the foreign-key invariant and test failure atomicity
+      @jovens@gotcode.org +phase1 +tokens +storage +security
+- [ ] (A) [auth] Enforce first-admin setup atomically across independent
+      service instances and SQLite connections; test concurrent setup attempts
+      @jovens@gotcode.org +phase1 +auth +storage +concurrency
+- [ ] (A) [storage] Make concurrent SQLite migration startup deterministic;
+      test independent connections, applied-version state, and rollback
+      behavior @jovens@gotcode.org +phase1 +storage +concurrency
+- [ ] (B) [storage] Decouple SQLite adapter options from application config
+      and translate config at the composition root; add only required options
+      @jovens@gotcode.org +phase1 +storage +architecture
+- [ ] (A) [docs] Specify shared management API behavior for web and CLI over
+      remote HTTP(S) and Unix sockets, including the local-admin trust boundary,
+      authz, errors, and validation for existing endpoints
+      @jovens@gotcode.org +phase1 +docs +api
+- [ ] (A) [shared] Close the architecture stabilization gate: record each
+      finding's disposition, complete tests and required checks, and do not
+      start further feature milestones until confirmed Phase 1 fixes pass
+      @jovens@gotcode.org +phase1 +architecture +release-gate
+- [ ] (A) [docs] Before the audit-ledger milestone, define actor/action/resource
+      and outcome fields, secret redaction, write durability, verification, and
+      failure behavior @jovens@gotcode.org +phase1 +docs +security +audit
 - [ ] (A) [audit] Define AuditStore outbound port in internal/audit/ports.go
       and implement internal/storage/store_audit.go in SQLite
       @jovens@gotcode.org +phase1 +audit +storage
@@ -198,6 +239,13 @@ Format: `[state] (Priority) [domain/binary] Task description @assignee +tag`
       @jovens@gotcode.org +phase1 +cruciblectl +secrets
 - [ ] (B) [web] Implement Web UI /settings/vault view with seal status banner
       and interactive unseal modal @jovens@gotcode.org +phase1 +web +secrets
+- [ ] (A) [docs] Before implementing the runner, define job versus attempt
+      lifecycle, retries, timeout, cancellation, crash recovery, idempotency,
+      and concurrency rules @jovens@gotcode.org +phase1 +docs +execution
+- [ ] (A) [docs] Before log/report implementation, define attempt-linked
+      artifacts, visibility, retention, size limits, partial-output and
+      disk-full behavior, plus live-stream reconnect/backpressure rules
+      @jovens@gotcode.org +phase1 +docs +reports
 - [ ] (A) [engine] Implement internal/engine package with Python venv manager,
       subprocess privilege dropping (SysProcAttr.Credential), and playbook
       runner @jovens@gotcode.org +phase1 +engine +security
@@ -236,6 +284,10 @@ Format: `[state] (Priority) [domain/binary] Task description @assignee +tag`
 ---
 
 ## Phase 2: Worker Fleet & Maintenance Lifecycle (v0.2.0)
+- [ ] (A) [docs] Before worker implementation, specify registration and
+      identity, mTLS authorization, heartbeat/reconnect, duplicate delivery,
+      availability transitions, drain, cancellation, leases/fencing, and
+      partition recovery semantics @jovens@gotcode.org +phase2 +docs +cluster
 - [ ] (A) [cluster] Author proto/crucible/cluster.proto with WorkerMeshService
       and mTLS transport definitions @jovens@gotcode.org +phase2 +cluster
       +proto
@@ -253,25 +305,28 @@ Format: `[state] (Priority) [domain/binary] Task description @assignee +tag`
 - [ ] (A) [cruciblectl] Implement cruciblectl node list, drain,
       activate, pause, and status commands @jovens@gotcode.org +phase2
       +cruciblectl +cluster
-- [ ] (A) [storage] Migrate auth SQL logic from internal/auth/adapter_sqlite.go
-      into internal/storage/store_auth.go, achieving zero SQL in internal/auth
-      @jovens@gotcode.org +phase2 +storage +auth
-- [ ] (B) [storage] Implement SQL dialect abstraction (? vs $1 placeholders,
-      upsert syntax) in internal/storage/dialect.go @jovens@gotcode.org +phase2
-      +storage
-- [ ] (B) [storage] Partition schema migrations into engine subdirectories
-      (schema/sqlite/, schema/postgres/, schema/mysql/) @jovens@gotcode.org
-      +phase2 +storage
+- [ ] (B) [storage] Validate stabilized persistence ports against worker
+      registration, heartbeat, and execution needs; add only required storage
+      operations @jovens@gotcode.org +phase2 +storage +cluster
+- [ ] (C) [storage] Reassess SQL dialect helpers and engine-specific migration
+      directories only when PostgreSQL/MySQL adapters are approved and their
+      concrete requirements are known @jovens@gotcode.org +phase3 +storage
 - [ ] (A) [shared] Execute worker drain and failover verification suite and
       cut release v0.2.0 tag @jovens@gotcode.org +phase2 +release
 
 ---
 
 ## Phase 3: Cluster Peer HA & Distributed Leases (v0.3.0)
+- [ ] (A) [docs] Before controller HA work, define state ownership,
+      consistency, quorum/partition assumptions, lease expiry, fencing, and
+      recovery when workers may still run; choose a supportable delivery
+      guarantee without assuming exactly-once side effects
+      @jovens@gotcode.org +phase3 +docs +cluster
 - [ ] (A) [cluster] Implement multi-controller peer-to-peer mesh replicator
       over mTLS gRPC @jovens@gotcode.org +phase3 +cluster
-- [ ] (A) [cluster] Implement distributed lease manager with monotonic fencing
-      tokens for exactly-once scheduling @jovens@gotcode.org +phase3 +cluster
+- [ ] (A) [cluster] Implement distributed leases, monotonic fencing tokens,
+      and stale-owner rejection under the documented delivery guarantee
+      @jovens@gotcode.org +phase3 +cluster
 - [ ] (B) [git] Implement internal/git package managing clone, fetch, rebase,
       commit, and push via deploy keys @jovens@gotcode.org +phase3 +git
 - [ ] (A) [git] Implement sub-500ms P2P commit broadcaster over gRPC
@@ -297,7 +352,8 @@ Format: `[state] (Priority) [domain/binary] Task description @assignee +tag`
 - [ ] (C) [schedule] Implement second-precision cron scheduler and one-time
       timer models in internal/schedule @jovens@gotcode.org +phase3 +schedule
 - [ ] (A) [shared] Execute cluster peer HA and Git broadcast verification
-      suite and cut release v0.3.0 tag @jovens@gotcode.org +phase3 +release
+      against documented failure semantics and cut release v0.3.0 tag
+      @jovens@gotcode.org +phase3 +release
 
 ---
 
@@ -328,6 +384,9 @@ Format: `[state] (Priority) [domain/binary] Task description @assignee +tag`
 ---
 
 ## Phase 5: Production Hardening, Packaging & Enterprise Release (v1.0.0)
+- [ ] (B) [docs] Define measurable SLI/SLO objectives after workload baselines,
+      including sources, windows, alerts, error-budget response, and runbooks
+      @jovens@gotcode.org +phase5 +docs +slo
 - [ ] (B) [shared] Package hardened systemd service units for crucibled and
       crucibled-worker @jovens@gotcode.org +phase5 +systemd
 - [ ] (B) [shared] Build multi-distro distribution packages (RPM, DEB, AUR,

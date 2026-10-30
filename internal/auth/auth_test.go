@@ -18,6 +18,7 @@ import (
 
 	"gotcode.org/crucible/internal/auth"
 	"gotcode.org/crucible/internal/id"
+	"gotcode.org/crucible/internal/storage"
 )
 
 func TestAESGCMCrypter(t *testing.T) {
@@ -198,7 +199,7 @@ func TestSQLiteStore_User(t *testing.T) {
 		}
 	}()
 
-	store := auth.NewSQLiteStore(db)
+	store := storage.NewSQLiteAuthStore(db)
 
 	u := &auth.User{
 		Username:  "admin",
@@ -231,7 +232,7 @@ func TestSQLiteStore_Device(t *testing.T) {
 		}
 	}()
 
-	store := auth.NewSQLiteStore(db)
+	store := storage.NewSQLiteAuthStore(db)
 
 	devID := id.NewDeviceID()
 	dev := &auth.TOTPDevice{
@@ -282,7 +283,7 @@ func TestSQLiteStore_Session(t *testing.T) {
 		}
 	}()
 
-	store := auth.NewSQLiteStore(db)
+	store := storage.NewSQLiteAuthStore(db)
 
 	sessID := id.NewSessionID()
 	sess := &auth.Session{
@@ -322,7 +323,7 @@ func TestSQLiteStore_ChallengeAndInvite(t *testing.T) {
 		}
 	}()
 
-	store := auth.NewSQLiteStore(db)
+	store := storage.NewSQLiteAuthStore(db)
 
 	// Challenge
 	ch := &auth.Challenge{
@@ -609,7 +610,7 @@ func TestPasswordLifecycleAndAdminUserManagement(t *testing.T) {
 		}
 	}()
 
-	store := auth.NewSQLiteStore(db)
+	store := storage.NewSQLiteAuthStore(db)
 	authenticator := auth.NewSQLiteAuthenticator(store).
 		WithPasswordExpiry(30 * 24 * time.Hour)
 
@@ -709,7 +710,7 @@ func setupInitialTestServices(
 ) (*auth.CommandService, *auth.QueryService, func()) {
 	t.Helper()
 	db := setupTestDB(t)
-	store := auth.NewSQLiteStore(db)
+	store := storage.NewSQLiteAuthStore(db)
 	authenticator := auth.NewSQLiteAuthenticator(store)
 	masterKey := make([]byte, 32)
 	crypter, err := auth.NewAESGCMCrypter(masterKey)

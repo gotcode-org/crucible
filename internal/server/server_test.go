@@ -27,7 +27,7 @@ import (
 func setupTestServer(
 	t *testing.T,
 	migrateDB bool,
-) (*server.HTTPServer, storage.Engine, string) {
+) (*server.HTTPServer, *storage.SQLiteAdapter, string) {
 	t.Helper()
 
 	tmpDir := t.TempDir()
@@ -472,7 +472,7 @@ func setupAuthServer(
 	memAuth := auth.NewMemoryAuthenticator()
 	memAuth.AddUser("alice", "correct-horse", auth.RoleAdmin)
 
-	authStore := auth.NewSQLiteStore(engine.DB())
+	authStore := storage.NewSQLiteAuthStore(engine.DB())
 	crypter := auth.NewPlaintextCrypter()
 	cmdSvc := auth.NewCommandService(
 		memAuth,
@@ -492,7 +492,9 @@ func setupAuthServer(
 		SocketPath: sockPath,
 		DaemonMode: "standalone",
 		Version:    "v0.1.0-authtest",
-	}, engine, nil, cmdSvc, querySvc)
+	}, engine, nil, cmdSvc, querySvc,
+		tokens.NewTokenService(storage.NewSQLiteTokenStore(engine.DB())),
+	)
 	if err != nil {
 		t.Fatalf("creating server: %v", err)
 	}
@@ -928,7 +930,7 @@ func setupRequire2FAServer(t *testing.T) (string, *http.Client) {
 
 	memAuth := auth.NewMemoryAuthenticator()
 	memAuth.AddUser("dave", "securepass123", auth.RoleAdmin)
-	authStore := auth.NewSQLiteStore(engine.DB())
+	authStore := storage.NewSQLiteAuthStore(engine.DB())
 	crypter := auth.NewPlaintextCrypter()
 	cmdSvc := auth.NewCommandService(
 		memAuth,
@@ -1076,7 +1078,7 @@ func TestAuth_Require2FAEnforcement(t *testing.T) {
 func setupPasswordLifecycleServer(
 	t *testing.T,
 	policy config.PasswordPolicyConfig,
-) (*server.HTTPServer, string, *auth.CommandService, *auth.SQLiteStore) {
+) (*server.HTTPServer, string, *auth.CommandService, *storage.SQLiteAuthStore) {
 	t.Helper()
 	tmpDir := t.TempDir()
 	dbPath := filepath.Join(tmpDir, "pwd_test.db")
@@ -1098,7 +1100,7 @@ func setupPasswordLifecycleServer(
 		t.Fatalf("running initial migration: %v", mErr)
 	}
 
-	authStore := auth.NewSQLiteStore(engine.DB())
+	authStore := storage.NewSQLiteAuthStore(engine.DB())
 	expiry, pErr := policy.ExpiryDuration()
 	if pErr != nil {
 		t.Fatalf("parsing policy duration: %v", pErr)
@@ -1149,7 +1151,9 @@ func setupPasswordLifecycleServer(
 		DaemonMode:     "standalone",
 		Version:        "v0.1.0-pwdtest",
 		PasswordPolicy: policy,
-	}, engine, nil, cmdSvc, querySvc)
+	}, engine, nil, cmdSvc, querySvc,
+		tokens.NewTokenService(storage.NewSQLiteTokenStore(engine.DB())),
+	)
 	if err != nil {
 		t.Fatalf("creating server: %v", err)
 	}
@@ -1311,7 +1315,7 @@ func testSettingsPasswordEnforcementAndChange(
 	t *testing.T,
 	client *http.Client,
 	baseURL string,
-	authStore *auth.SQLiteStore,
+	authStore *storage.SQLiteAuthStore,
 ) {
 	t.Helper()
 	opHash, hErr := auth.HashPassword("InitPass123!")
@@ -1536,7 +1540,7 @@ func testSettingsUsersAuthGuards(
 	t *testing.T,
 	client *http.Client,
 	baseURL string,
-	authStore *auth.SQLiteStore,
+	authStore *storage.SQLiteAuthStore,
 ) *http.Cookie {
 	t.Helper()
 	resp, _ := doHTTPReq(
@@ -1636,7 +1640,7 @@ func testSettingsUsersAdminCRUD(
 	t *testing.T,
 	client *http.Client,
 	baseURL string,
-	authStore *auth.SQLiteStore,
+	authStore *storage.SQLiteAuthStore,
 	adminCookie *http.Cookie,
 ) {
 	t.Helper()
@@ -1653,7 +1657,7 @@ func testAdminCreateUser(
 	t *testing.T,
 	client *http.Client,
 	baseURL string,
-	authStore *auth.SQLiteStore,
+	authStore *storage.SQLiteAuthStore,
 	adminCookie *http.Cookie,
 ) {
 	t.Helper()
@@ -1718,7 +1722,7 @@ func testAdminUserStatusToggle(
 	t *testing.T,
 	client *http.Client,
 	baseURL string,
-	authStore *auth.SQLiteStore,
+	authStore *storage.SQLiteAuthStore,
 	adminCookie *http.Cookie,
 ) {
 	t.Helper()
@@ -1784,7 +1788,7 @@ func testAdminUserUpdate(
 	t *testing.T,
 	client *http.Client,
 	baseURL string,
-	authStore *auth.SQLiteStore,
+	authStore *storage.SQLiteAuthStore,
 	adminCookie *http.Cookie,
 ) {
 	t.Helper()
@@ -1900,7 +1904,7 @@ func testAdminRevokeDevice(
 	t *testing.T,
 	client *http.Client,
 	baseURL string,
-	authStore *auth.SQLiteStore,
+	authStore *storage.SQLiteAuthStore,
 	adminCookie *http.Cookie,
 ) {
 	t.Helper()
@@ -1975,7 +1979,7 @@ func testAdminUserDelete(
 	t *testing.T,
 	client *http.Client,
 	baseURL string,
-	authStore *auth.SQLiteStore,
+	authStore *storage.SQLiteAuthStore,
 	adminCookie *http.Cookie,
 ) {
 	t.Helper()
@@ -2333,7 +2337,7 @@ func testAPIDualTransportTCPBearer(
 func setupFreshServerWithoutUsers(
 	t *testing.T,
 	policy config.PasswordPolicyConfig,
-) (*server.HTTPServer, string, *auth.SQLiteStore) {
+) (*server.HTTPServer, string, *storage.SQLiteAuthStore) {
 	t.Helper()
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "fresh.db")
@@ -2355,7 +2359,7 @@ func setupFreshServerWithoutUsers(
 		t.Fatalf("running initial migration: %v", mErr)
 	}
 
-	authStore := auth.NewSQLiteStore(engine.DB())
+	authStore := storage.NewSQLiteAuthStore(engine.DB())
 	expiry, pErr := policy.ExpiryDuration()
 	if pErr != nil {
 		t.Fatalf("parsing policy duration: %v", pErr)

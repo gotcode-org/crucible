@@ -2,7 +2,7 @@
 // Copyright (c) 2026 The GotCode Collective
 // See the LICENSE file in the project root for full license details.
 
-package tokens
+package storage
 
 import (
 	"context"
@@ -13,20 +13,21 @@ import (
 	"time"
 
 	"gotcode.org/crucible/internal/auth"
+	tokendomain "gotcode.org/crucible/internal/tokens"
 )
 
-// SQLiteStore implements the TokenStore outbound port on top of SQLite.
-type SQLiteStore struct {
+// SQLiteTokenStore implements the token persistence port on top of SQLite.
+type SQLiteTokenStore struct {
 	db *sql.DB
 }
 
-// NewSQLiteStore creates a new TokenStore adapter backed by SQLite.
-func NewSQLiteStore(db *sql.DB) *SQLiteStore {
-	return &SQLiteStore{db: db}
+// NewSQLiteTokenStore creates a token persistence adapter backed by SQLite.
+func NewSQLiteTokenStore(db *sql.DB) *SQLiteTokenStore {
+	return &SQLiteTokenStore{db: db}
 }
 
 // CreateToken persists a new token record.
-func (s *SQLiteStore) CreateToken(ctx context.Context, tok *APIToken) error {
+func (s *SQLiteTokenStore) CreateToken(ctx context.Context, tok *tokendomain.APIToken) error {
 	scopesJSON, err := json.Marshal(tok.Scopes)
 	if err != nil {
 		return fmt.Errorf("marshaling token scopes: %w", err)
@@ -83,10 +84,10 @@ INSERT INTO api_tokens (
 }
 
 // GetTokenByHash retrieves an active or revoked token by its SHA-256 hash.
-func (s *SQLiteStore) GetTokenByHash(
+func (s *SQLiteTokenStore) GetTokenByHash(
 	ctx context.Context,
 	hash string,
-) (*APIToken, error) {
+) (*tokendomain.APIToken, error) {
 	query := `
 SELECT id, name, token_prefix, token_hash, username, role, scopes_json,
        created_at, last_used_at, last_used_ip, expires_at, revoked, revoked_at
@@ -98,10 +99,10 @@ WHERE token_hash = ?`
 }
 
 // GetTokenByID retrieves a token by its ULID identifier.
-func (s *SQLiteStore) GetTokenByID(
+func (s *SQLiteTokenStore) GetTokenByID(
 	ctx context.Context,
 	id string,
-) (*APIToken, error) {
+) (*tokendomain.APIToken, error) {
 	query := `
 SELECT id, name, token_prefix, token_hash, username, role, scopes_json,
        created_at, last_used_at, last_used_ip, expires_at, revoked, revoked_at
@@ -114,10 +115,10 @@ WHERE id = ?`
 
 // ListUserTokens retrieves all tokens belonging to an operator, or all tokens
 // if username is empty.
-func (s *SQLiteStore) ListUserTokens(
+func (s *SQLiteTokenStore) ListUserTokens(
 	ctx context.Context,
 	username string,
-) ([]APIToken, error) {
+) ([]tokendomain.APIToken, error) {
 	var rows *sql.Rows
 	var err error
 
@@ -150,7 +151,7 @@ ORDER BY created_at DESC`
 		}
 	}()
 
-	var tokens []APIToken
+	var tokens []tokendomain.APIToken
 	for rows.Next() {
 		tok, err := s.scanTokenRow(rows)
 		if err != nil {
@@ -162,7 +163,7 @@ ORDER BY created_at DESC`
 }
 
 // TouchToken updates the last-used timestamp and IP for an active token.
-func (s *SQLiteStore) TouchToken(
+func (s *SQLiteTokenStore) TouchToken(
 	ctx context.Context,
 	id string,
 	ip string,
@@ -188,7 +189,7 @@ WHERE id = ? AND revoked = 0`
 
 // RevokeToken marks a token as revoked. If username is non-empty, the token
 // must belong to that username.
-func (s *SQLiteStore) RevokeToken(
+func (s *SQLiteTokenStore) RevokeToken(
 	ctx context.Context,
 	id string,
 	username string,
@@ -219,7 +220,7 @@ WHERE id = ? AND revoked = 0`
 		return fmt.Errorf("checking revoke rows affected: %w", err)
 	}
 	if rows == 0 {
-		return ErrTokenNotFound
+		return tokendomain.ErrTokenNotFound
 	}
 	return nil
 }
@@ -228,17 +229,17 @@ type rowScanner interface {
 	Scan(dest ...any) error
 }
 
-func (s *SQLiteStore) scanToken(r rowScanner) (*APIToken, error) {
+func (s *SQLiteTokenStore) scanToken(r rowScanner) (*tokendomain.APIToken, error) {
 	tok, err := s.scanTokenRow(r)
 	if errors.Is(err, sql.ErrNoRows) {
-		return nil, ErrTokenNotFound
+		return nil, tokendomain.ErrTokenNotFound
 	}
 	return tok, err
 }
 
-func (s *SQLiteStore) scanTokenRow(r rowScanner) (*APIToken, error) {
+func (s *SQLiteTokenStore) scanTokenRow(r rowScanner) (*tokendomain.APIToken, error) {
 	var (
-		tok          APIToken
+		tok          tokendomain.APIToken
 		roleStr      string
 		scopesRaw    string
 		createdStr   string

@@ -77,11 +77,8 @@ func NewServer(
 	}
 
 	var tSvc tokens.Service
-	if len(tokenSvc) > 0 && tokenSvc[0] != nil {
+	if len(tokenSvc) > 0 {
 		tSvc = tokenSvc[0]
-	} else if engine != nil && engine.DB() != nil {
-		store := tokens.NewSQLiteStore(engine.DB())
-		tSvc = tokens.NewTokenService(store)
 	}
 
 	s := &HTTPServer{

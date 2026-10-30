@@ -138,6 +138,11 @@ governance. For detailed specifications, consult the project documentation:
 
 * [`ARCHITECTURE.md`](./ARCHITECTURE.md) — Comprehensive architectural
   diagrams, subsystem boundaries, and data flows.
+* [`docs/ROADMAP.md`](./docs/ROADMAP.md) — Strategic milestones and capability-based delivery gates.
+* [`docs/DECISIONS/`](./docs/DECISIONS/) — Architecture decision records and their status.
+* [`CONTEXT.md`](./CONTEXT.md) — Project context and confirmed direction from the architecture review.
+* [`recommendations.md`](./recommendations.md) — Architecture review findings; proposals require validation and approval.
+* [`docs/AI-HANDOFF.md`](./docs/AI-HANDOFF.md) — Verified AI development handoff and session state.
 * [`PLAN.md`](./PLAN.md) — Full 21-section technical blueprints and systems
   specifications.
 * [`TODO.md`](./TODO.md) — Phase-by-phase implementation checklist and

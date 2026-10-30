@@ -154,7 +154,7 @@ func dbStatusCmd() *cobra.Command {
 func openEngine(
 	ctx context.Context,
 	configPath, dbOverride string,
-) (storage.Engine, error) {
+) (*storage.SQLiteAdapter, error) {
 	svc := config.DefaultQueryService()
 	var flagOverrides config.ServerFlagOverrides
 	if dbOverride != "" {

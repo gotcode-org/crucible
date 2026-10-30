@@ -77,7 +77,7 @@ func startCmd() *cobra.Command {
 				return fmt.Errorf("running initial schema migration: %w", mErr)
 			}
 
-			authStore := auth.NewSQLiteStore(engine.DB())
+			authStore := storage.NewSQLiteAuthStore(engine.DB())
 			masterKey, kErr := auth.LoadOrCreateMasterKey(
 				cfg.Secrets.KeyPath,
 			)
@@ -127,7 +127,7 @@ func startCmd() *cobra.Command {
 				authStore,
 			)
 
-			tokenStore := tokens.NewSQLiteStore(engine.DB())
+			tokenStore := storage.NewSQLiteTokenStore(engine.DB())
 			tokenSvc := tokens.NewTokenService(tokenStore)
 
 			appVersion := resolveAppVersion(ctx)

@@ -6,7 +6,6 @@ package storage
 
 import (
 	"context"
-	"database/sql"
 )
 
 // CommandHandler defines the inbound hexagonal port for database
@@ -45,9 +44,6 @@ type Engine interface {
 	// Path returns the canonical database filesystem path or DSN endpoint.
 	Path() string
 
-	// DB returns the underlying standard library SQL connection pool.
-	DB() *sql.DB
-
 	// Ping checks connectivity to the database engine.
 	Ping(ctx context.Context) error
 
@@ -62,12 +58,4 @@ type Engine interface {
 
 	// Close terminates the connection pool and checkpoints pending journals.
 	Close() error
-}
-
-// Transactor defines the outbound hexagonal port for executing operations
-// within an isolated transaction.
-type Transactor interface {
-	// WithinTransaction runs fn inside an isolated database transaction,
-	// automatically committing on success or rolling back on error.
-	WithinTransaction(ctx context.Context, fn func(tx *sql.Tx) error) error
 }
