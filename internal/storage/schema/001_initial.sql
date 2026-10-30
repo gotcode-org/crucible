@@ -100,7 +100,7 @@ CREATE TABLE IF NOT EXISTS api_tokens (
     token_hash    TEXT NOT NULL UNIQUE,    -- SHA-256 hash of plaintext token
     username      TEXT NOT NULL,           -- Owner PAM username
     role          TEXT NOT NULL,           -- viewer | operator | maintainer | admin
-    scopes_json   TEXT NOT NULL DEFAULT '["*"]',
+    scopes_json   TEXT NOT NULL DEFAULT '[]',
     created_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     last_used_at  DATETIME,
     last_used_ip  TEXT,

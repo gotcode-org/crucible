@@ -58,6 +58,13 @@ func tokenCreateCmd() *cobra.Command {
 				)
 			}
 
+			if len(scopes) == 0 {
+				return errors.New(
+					"token scopes are required (--scopes); " +
+						"use '*' for all permissions permitted by role",
+				)
+			}
+
 			transport, err := ResolveClientTransport(
 				cmd.Context(),
 				ClientOptions{
@@ -160,8 +167,9 @@ func tokenCreateCmd() *cobra.Command {
 	cmd.Flags().StringSliceVar(
 		&scopes,
 		"scopes",
-		[]string{"*"},
-		"Token permission scopes (e.g. tokens:read,system:read or *)",
+		nil,
+		"Token permission scopes (required; comma-separated or "+
+			"repeated; e.g. tokens:read,system:read or *)",
 	)
 	cmd.Flags().StringVar(
 		&socketPath,

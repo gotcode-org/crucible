@@ -149,6 +149,7 @@ func TestTokenCommand_Create(t *testing.T) {
 		"token", "create",
 		"--name", "deploy-token",
 		"--role", "operator",
+		"--scopes", "*",
 		"--server", mockServer.URL,
 		"--token", "cb_pat_testsession",
 	})
@@ -169,6 +170,33 @@ func TestTokenCommand_Create(t *testing.T) {
 			"cb_pat_9f82ab1234567890abcdef0123456789",
 		) {
 		t.Errorf("output missing expected fields: %s", out)
+	}
+}
+
+func TestTokenCommand_Create_RequiresScopes(t *testing.T) {
+	t.Parallel()
+
+	cmd := newRootCmd()
+	var buf bytes.Buffer
+	cmd.SetOut(&buf)
+	cmd.SetErr(&buf)
+	cmd.SetArgs([]string{
+		"token", "create",
+		"--name", "deploy-token",
+		"--role", "operator",
+		"--server", "http://127.0.0.1:8080",
+		"--token", "cb_pat_testsession",
+	})
+
+	err := cmd.ExecuteContext(context.Background())
+	if err == nil {
+		t.Fatal("expected error when scopes are omitted, got nil")
+	}
+	if !strings.Contains(err.Error(), "token scopes are required") {
+		t.Fatalf(
+			"expected 'token scopes are required' error, got: %v",
+			err,
+		)
 	}
 }
 

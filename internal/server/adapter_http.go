@@ -2671,6 +2671,15 @@ func (s *HTTPServer) handleAPITokensPost(
 		return
 	}
 
+	if len(req.Scopes) == 0 {
+		http.Error(
+			w,
+			"Bad Request: scopes are required; use '*' for full role permissions",
+			http.StatusBadRequest,
+		)
+		return
+	}
+
 	targetUser := sess.Username
 	if req.Username != "" && sess.Role == auth.RoleAdmin {
 		targetUser = req.Username
@@ -2815,9 +2824,6 @@ func parseScopes(raw string) []string {
 			}
 		}
 	}
-	if len(list) == 0 {
-		return []string{"*"}
-	}
 	return list
 }
 
@@ -2886,6 +2892,18 @@ func (s *HTTPServer) handleSettingsTokensCreate(
 			nil,
 			"",
 			"Token name is required",
+		)
+		return
+	}
+
+	if len(scopesList) == 0 {
+		s.renderSettingsTokensView(
+			w,
+			r,
+			sess,
+			nil,
+			"",
+			"Token scopes are required (use '*' for all permissions)",
 		)
 		return
 	}

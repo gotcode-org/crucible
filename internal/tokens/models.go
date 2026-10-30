@@ -34,6 +34,12 @@ var (
 	// ErrInvalidScope indicates one or more requested scopes are
 	// unrecognized.
 	ErrInvalidScope = errors.New("unrecognized token scope")
+
+	// ErrScopesRequired indicates at least one scope must be supplied.
+	ErrScopesRequired = errors.New("at least one token scope is required")
+
+	// ErrOwnerInactive indicates the token owner account is inactive.
+	ErrOwnerInactive = errors.New("token owner account is inactive or disabled")
 )
 
 // APIToken represents a persistent Personal Access Token (PAT) record in the

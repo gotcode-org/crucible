@@ -38,11 +38,21 @@ parity across all requests:
 
 - **Formula**:
   `Effective Permissions = User Role Permissions ∩ PAT Scope Permissions`
-- **Role Boundary**: A user's role defines the ceiling of operations available
-  to that user (e.g. `admin`, `operator`, `maintainer`, `viewer`).
-- **Scope Restriction**: A Personal Access Token's scopes define the subset of
-  those operations available through that credential. A token can never
-  escalate privileges beyond its owner's role.
+- **Dynamic Role Ceiling**: An owner's current role defines the absolute
+  maximum permissions available. A PAT's scopes can only narrow those
+  permissions; they can never add permissions beyond the owner's role. Role
+  changes to an owner take effect immediately across all of their PATs without
+  requiring token recreation.
+- **Account Lifecycle Enforcement**: A token owner must exist and be active.
+  Disabled, deactivated, or deleted owner accounts cause PAT authentication to
+  fail immediately (`401 Unauthorized`), even if the token itself is unexpired.
+- **Scope Mandate**: Token scopes are strictly required upon creation across
+  all entry points (CLI, Web UI, and API). Omitted or empty scopes fail closed
+  (`400 Bad Request`). Wildcard access is granted only when `*` is explicitly
+  requested.
+- **Legacy Token Compatibility**: Existing persisted tokens with empty or null
+  scopes fail closed (`403 Forbidden`). Operators should audit existing tokens
+  and reissue them with explicit scopes.
 - **Transports**:
   - **Local UNIX Domain Socket (`/run/crucibled/crucible.sock`)**:
     Authenticated as the trusted local operator principal (`auth.RoleAdmin`,
@@ -52,7 +62,7 @@ parity across all requests:
     role permissions (`CredentialSession`).
   - **Remote TCP PAT**: Requests carrying `Authorization: Bearer <token>`
     (`CredentialToken`) are evaluated against the intersection of the owner's
-    role permissions and the token's granted scopes.
+    current role permissions and the token's granted scopes.
 - **Scope Vocabulary**:
   - `*`: Full wildcard (all permissions permitted by the user's role).
   - `<resource>:*`: Resource prefix wildcard (e.g. `tokens:*`).
@@ -62,7 +72,8 @@ parity across all requests:
     - `account:read`, `account:write`
     - `system:read`, `system:admin`
 - **Status Codes**:
-  - `401 Unauthorized`: Missing, unparseable, expired, or revoked credential.
+  - `401 Unauthorized`: Missing, unparseable, expired, or revoked credential,
+    or inactive/deleted token owner account.
   - `403 Forbidden`: Authenticated principal lacks required role permission or
     token scope.
 
@@ -407,8 +418,10 @@ Generates and persists a new Personal Access Token. The plaintext token
 ```
   - `name` (string, required): Human-readable token name.
   - `role` (string, optional): Access role (`admin`, `operator`, `viewer`).
-  - `scopes` (array of string, optional): Permission scopes (defaults to
-    `["*"]`).
+    Cannot exceed the owner's effective role.
+  - `scopes` (array of string, required): Explicit permission scopes (e.g.
+    `["tokens:read", "tokens:write"]` or `["*"]` for all permissions permitted
+    by the owner's role). Omitted or empty scope list is rejected.
   - `expires_in` (string, optional): Lifetime duration (e.g. `720h`, `30d`,
     `0`).
   - `username` (string, optional, admin-only): Target owner username.
@@ -422,7 +435,7 @@ Generates and persists a new Personal Access Token. The plaintext token
         "token_prefix": "cb_pat_11223344",
         "username": "alice",
         "role": "operator",
-        "scopes": ["*"],
+        "scopes": ["tokens:read", "system:read"],
         "created_at": "2026-10-29T15:30:00Z",
         "expires_at": "2026-11-28T15:30:00Z",
         "revoked": false
@@ -430,8 +443,10 @@ Generates and persists a new Personal Access Token. The plaintext token
       "raw_token": "cb_pat_11223344556677889900aabbccddeeff..."
     }
     ```
-  - `400 Bad Request`: Missing name or invalid expiration duration.
-  - `403 Forbidden`: Non-admin operator attempted to grant admin role.
+  - `400 Bad Request`: Missing token name, missing/empty scopes, unrecognized
+    scope syntax, or invalid expiration duration.
+  - `403 Forbidden`: Non-admin operator attempted to grant admin role, or
+    authenticated principal lacks `tokens:write` permission.
 
 ---
 

@@ -6,12 +6,41 @@ package tokens
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"strings"
 	"time"
 
 	"gotcode.org/crucible/internal/auth"
 	"gotcode.org/crucible/internal/id"
 )
+
+// ValidateScopes validates and deduplicates requested token scopes.
+// An empty slice is rejected with ErrScopesRequired.
+func ValidateScopes(scopes []string) ([]string, error) {
+	if len(scopes) == 0 {
+		return nil, ErrScopesRequired
+	}
+	seen := make(map[string]struct{}, len(scopes))
+	var result []string
+	for _, s := range scopes {
+		trimmed := strings.TrimSpace(s)
+		if trimmed == "" {
+			continue
+		}
+		if !auth.IsValidScope(trimmed) {
+			return nil, fmt.Errorf("%w: %q", ErrInvalidScope, trimmed)
+		}
+		if _, ok := seen[trimmed]; !ok {
+			seen[trimmed] = struct{}{}
+			result = append(result, trimmed)
+		}
+	}
+	if len(result) == 0 {
+		return nil, ErrScopesRequired
+	}
+	return result, nil
+}
 
 // TokenService implements the inbound application service port for Personal
 // Access Tokens.
@@ -39,18 +68,30 @@ func (s *TokenService) CreateToken(
 	if username == "" {
 		return nil, ErrInvalidToken
 	}
-	if _, err := s.userLookup.GetUser(ctx, username); err != nil {
+	if s.userLookup == nil {
+		return nil, errors.New("user lookup service unconfigured")
+	}
+	user, err := s.userLookup.GetUser(ctx, username)
+	if err != nil {
+		return nil, err
+	}
+	if user == nil {
+		return nil, ErrInvalidToken
+	}
+	if !user.IsActive {
+		return nil, ErrOwnerInactive
+	}
+
+	scopes, err := ValidateScopes(cmd.Scopes)
+	if err != nil {
 		return nil, err
 	}
 
-	role := cmd.Role
-	if !role.IsValid() {
-		role = auth.RoleOperator
-	}
-
-	scopes := cmd.Scopes
-	if len(scopes) == 0 {
-		scopes = []string{"*"}
+	// Owner role ceiling: token role cannot elevate above the owner's
+	// current effective role.
+	role := user.EffectiveRole()
+	if cmd.Role.IsValid() && auth.RoleRank(cmd.Role) < auth.RoleRank(role) {
+		role = cmd.Role
 	}
 
 	rawToken, prefix, hash, err := GenerateRawToken()
@@ -89,7 +130,8 @@ func (s *TokenService) CreateToken(
 }
 
 // ValidateToken checks a raw token string against the store, verifies its
-// active status, and touches last-used telemetry.
+// active status and owner account, touches last-used telemetry, and binds
+// effective role permissions to the owner's current role.
 func (s *TokenService) ValidateToken(
 	ctx context.Context,
 	rawToken string,
@@ -116,6 +158,25 @@ func (s *TokenService) ValidateToken(
 		now.After(*tok.ExpiresAt) {
 		return nil, ErrTokenExpired
 	}
+
+	if s.userLookup == nil {
+		return nil, errors.New("user lookup service unconfigured")
+	}
+	user, err := s.userLookup.GetUser(ctx, tok.Username)
+	if err != nil {
+		return nil, err
+	}
+	if user == nil {
+		return nil, ErrInvalidToken
+	}
+	if !user.IsActive {
+		return nil, ErrOwnerInactive
+	}
+
+	// Dynamic owner role derivation: token permissions can never exceed
+	// the owner's current effective role, and owner promotions/demotions
+	// take effect immediately.
+	tok.Role = user.EffectiveRole()
 
 	// Update telemetry
 	if tErr := s.store.TouchToken(

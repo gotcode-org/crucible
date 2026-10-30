@@ -254,11 +254,14 @@ func (s *SQLiteTokenStore) scanTokenRow(r rowScanner) (*tokendomain.APIToken, er
 	tok.Role = auth.Role(roleStr)
 	tok.Revoked = revokedInt == 1
 
-	if jErr := json.Unmarshal(
-		[]byte(scopesRaw),
-		&tok.Scopes,
-	); jErr != nil {
-		tok.Scopes = []string{"*"}
+	tok.Scopes = nil
+	if scopesRaw != "" {
+		if jErr := json.Unmarshal(
+			[]byte(scopesRaw),
+			&tok.Scopes,
+		); jErr != nil {
+			tok.Scopes = nil
+		}
 	}
 
 	if t, pErr := time.Parse(time.RFC3339, createdStr); pErr == nil {

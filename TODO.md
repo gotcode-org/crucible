@@ -203,10 +203,15 @@ Format: `[state] (Priority) [domain/binary] Task description @assignee +tag`
 - [ ] (B) [storage] Decouple SQLite adapter options from application config
       and translate config at the composition root; add only required options
       @jovens@gotcode.org +phase1 +storage +architecture
-- [ ] (A) [docs] Specify shared management API behavior for web and CLI over
-      remote HTTP(S) and Unix sockets; record current PAT-scope gaps and propose
-      the role/scope/transport contract for owner decision before enforcement
+- [x] (A) [docs] Specify shared management API behavior for web and CLI over
+      remote HTTP(S) and Unix sockets; enforce role/scope/transport contract,
+      dynamic owner role ceiling, and inactive owner rejection
       @jovens@gotcode.org +phase1 +docs +api
+- [x] (A) [auth] Harden PAT authorization boundaries: enforce owner current
+      role ceiling dynamically, reject inactive/deleted owner accounts, mandate
+      explicit scopes on creation across CLI/Web/API, and fail closed on empty
+      or unmapped legacy token scopes @jovens@gotcode.org +phase1 +auth
+      +security
 - [ ] (A) [shared] Close the architecture stabilization gate: record each
       finding's disposition, complete tests and required checks, and do not
       start further feature milestones until confirmed Phase 1 fixes pass

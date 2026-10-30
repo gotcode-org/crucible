@@ -373,13 +373,13 @@
           for="token-scopes-input"
           class="block text-xs font-mono text-zinc-400 mb-1"
         >
-          Scopes (comma-separated, default: *)
+          Scopes (required; comma-separated, e.g. * for all permissions)
         </label>
         <input
           type="text"
           id="token-scopes-input"
           name="scopes"
-          value="*"
+          required
           placeholder="* or tokens:read, account:read"
           class="w-full bg-zinc-950 border border-zinc-800 rounded-lg
             px-3 py-2 text-xs font-mono text-white placeholder-zinc-600

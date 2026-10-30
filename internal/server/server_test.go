@@ -2132,6 +2132,7 @@ func TestAuthWeb_SettingsTokens(t *testing.T) {
 	createForm := url.Values{
 		"name":       {"ci-pipeline"},
 		"role":       {"operator"},
+		"scopes":     {"*"},
 		"expires_in": {"720h"},
 	}
 	createResp, createBody := doHTTPReq(
@@ -2319,6 +2320,7 @@ func testAPIDualTransportUnixCreate(
 		"name": "remote-workstation",
 		"username": "admin",
 		"role": "admin",
+		"scopes": ["*"],
 		"expires_in": "720h"
 	}`)
 	req, err := http.NewRequestWithContext(
@@ -2545,13 +2547,17 @@ func TestAuthAPI_TokenScopeEnforcement(t *testing.T) {
 	)
 	testScopeOperatorWildcard(t, tcpClient, baseURL, opWildcardTok)
 
-	// 4. Token with unrelated/invalid scopes fails closed
-	invalidScopeTok := createToken(
-		"admin",
-		auth.RoleAdmin,
-		[]string{"unknown:scope"},
+	// 4. Token creation rejects empty and invalid scopes
+	testScopeCreationRejection(t, unixClient)
+
+	// 5. Inactive/deleted owners and dynamic role derivation
+	testScopeOwnerLifecycleAndDynamicRole(
+		t,
+		tcpClient,
+		baseURL,
+		authStore,
+		createToken,
 	)
-	testScopeInvalidScope(t, tcpClient, baseURL, invalidScopeTok)
 }
 
 func testScopeUnixAdminAccess(t *testing.T, client *http.Client) {
@@ -2570,6 +2576,9 @@ func testScopeUnixAdminAccess(t *testing.T, client *http.Client) {
 		t.Fatalf("doing unix request: %v", dErr)
 	}
 	defer closeBody(t, resp)
+	if _, cpErr := io.Copy(io.Discard, resp.Body); cpErr != nil {
+		t.Logf("draining unix response body: %v", cpErr)
+	}
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf(
 			"expected 200 for unix admin access, got %d",
@@ -2698,31 +2707,303 @@ func testScopeOperatorWildcard(
 	}
 }
 
-func testScopeInvalidScope(
+func testScopeCreationRejection(t *testing.T, client *http.Client) {
+	t.Helper()
+
+	// 1. Omitted/empty scopes
+	emptyPayload := strings.NewReader(`{
+		"name": "empty-scopes-pat",
+		"username": "admin",
+		"scopes": []
+	}`)
+	req, cErr := http.NewRequestWithContext(
+		context.Background(),
+		http.MethodPost,
+		"http://unix/api/v1/tokens",
+		emptyPayload,
+	)
+	if cErr != nil {
+		t.Fatalf("creating empty-scopes req: %v", cErr)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, dErr := client.Do(req)
+	if dErr != nil {
+		t.Fatalf("doing empty-scopes req: %v", dErr)
+	}
+	defer closeBody(t, resp)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400 for empty scopes, got %d", resp.StatusCode)
+	}
+
+	// 2. Unrecognized scope
+	invalidPayload := strings.NewReader(`{
+		"name": "invalid-scope-pat",
+		"username": "admin",
+		"scopes": ["unrecognized:scope"]
+	}`)
+	iReq, cErr := http.NewRequestWithContext(
+		context.Background(),
+		http.MethodPost,
+		"http://unix/api/v1/tokens",
+		invalidPayload,
+	)
+	if cErr != nil {
+		t.Fatalf("creating invalid-scope req: %v", cErr)
+	}
+	iReq.Header.Set("Content-Type", "application/json")
+	iResp, dErr := client.Do(iReq)
+	if dErr != nil {
+		t.Fatalf("doing invalid-scope req: %v", dErr)
+	}
+	defer closeBody(t, iResp)
+	if iResp.StatusCode != http.StatusBadRequest {
+		t.Fatalf(
+			"expected 400 for unrecognized scope, got %d",
+			iResp.StatusCode,
+		)
+	}
+}
+
+func testScopeOwnerLifecycleAndDynamicRole(
 	t *testing.T,
 	client *http.Client,
 	baseURL string,
-	token string,
+	authStore *storage.SQLiteAuthStore,
+	createToken func(string, auth.Role, []string) string,
 ) {
 	t.Helper()
-	req, cErr := http.NewRequestWithContext(
-		context.Background(),
+	ctx := context.Background()
+
+	// Create test user 'tempuser' with operator role
+	tempHash, err := auth.HashPassword("TempPass1234!")
+	if err != nil {
+		t.Fatalf("hashing temp user password: %v", err)
+	}
+	tempUser := auth.User{
+		Username:     "tempuser",
+		PasswordHash: &tempHash,
+		Role:         auth.RoleOperator,
+		IsActive:     true,
+	}
+	if cErr := authStore.CreateUser(ctx, &tempUser); cErr != nil {
+		t.Fatalf("creating temp user: %v", cErr)
+	}
+
+	// Create PAT for tempuser with tokens:read scope
+	tempTok := createToken(
+		"tempuser",
+		auth.RoleOperator,
+		[]string{"tokens:read"},
+	)
+
+	// Validate initially succeeds: GET /api/v1/tokens returns 200
+	req, rErr := http.NewRequestWithContext(
+		ctx,
 		http.MethodGet,
 		baseURL+"/api/v1/tokens",
 		nil,
 	)
-	if cErr != nil {
-		t.Fatalf("creating req: %v", cErr)
+	if rErr != nil {
+		t.Fatalf("creating initial req: %v", rErr)
+	}
+	req.Header.Set("Authorization", "Bearer "+tempTok)
+	resp, dErr := client.Do(req)
+	if dErr != nil {
+		t.Fatalf("doing temp token req: %v", dErr)
+	}
+	defer closeBody(t, resp)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf(
+			"expected 200 for tempuser initially, got %d",
+			resp.StatusCode,
+		)
+	}
+
+	testOwnerDeactivationRejection(
+		t,
+		client,
+		baseURL,
+		authStore,
+		&tempUser,
+		tempTok,
+	)
+	testOwnerPromotionMaintainsScopeBounds(
+		t,
+		client,
+		baseURL,
+		authStore,
+		&tempUser,
+		tempTok,
+	)
+
+	adminWildTok := createToken("admin", auth.RoleAdmin, []string{"*"})
+	testOwnerDemotionReducesPermissions(
+		t,
+		client,
+		baseURL,
+		authStore,
+		adminWildTok,
+	)
+
+	testOwnerDeletionRejection(t, client, baseURL, authStore, tempTok)
+}
+
+func testOwnerDeactivationRejection(
+	t *testing.T,
+	client *http.Client,
+	baseURL string,
+	authStore *storage.SQLiteAuthStore,
+	user *auth.User,
+	token string,
+) {
+	t.Helper()
+	ctx := context.Background()
+	user.IsActive = false
+	if uErr := authStore.UpdateUser(ctx, user); uErr != nil {
+		t.Fatalf("deactivating user: %v", uErr)
+	}
+
+	req, rErr := http.NewRequestWithContext(
+		ctx,
+		http.MethodGet,
+		baseURL+"/api/v1/tokens",
+		nil,
+	)
+	if rErr != nil {
+		t.Fatalf("creating deact req: %v", rErr)
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
 	resp, dErr := client.Do(req)
 	if dErr != nil {
-		t.Fatalf("doing req: %v", dErr)
+		t.Fatalf("doing deact req: %v", dErr)
+	}
+	defer closeBody(t, resp)
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("expected 401 for deactivated owner, got %d", resp.StatusCode)
+	}
+}
+
+func testOwnerPromotionMaintainsScopeBounds(
+	t *testing.T,
+	client *http.Client,
+	baseURL string,
+	authStore *storage.SQLiteAuthStore,
+	user *auth.User,
+	token string,
+) {
+	t.Helper()
+	ctx := context.Background()
+	user.IsActive = true
+	user.Role = auth.RoleAdmin
+	if uErr := authStore.UpdateUser(ctx, user); uErr != nil {
+		t.Fatalf("promoting user: %v", uErr)
+	}
+
+	// Promoted to admin, but token only has tokens:read
+	// POST /api/v1/tokens must still be 403 Forbidden
+	req, rErr := http.NewRequestWithContext(
+		ctx,
+		http.MethodPost,
+		baseURL+"/api/v1/tokens",
+		strings.NewReader(`{"name":"forbidden"}`),
+	)
+	if rErr != nil {
+		t.Fatalf("creating promoted write req: %v", rErr)
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	resp, dErr := client.Do(req)
+	if dErr != nil {
+		t.Fatalf("doing promoted write req: %v", dErr)
 	}
 	defer closeBody(t, resp)
 	if resp.StatusCode != http.StatusForbidden {
 		t.Fatalf(
-			"expected 403 for invalid scope token, got %d",
+			"expected 403 for promoted owner lacking write scope, got %d",
+			resp.StatusCode,
+		)
+	}
+}
+
+func testOwnerDemotionReducesPermissions(
+	t *testing.T,
+	client *http.Client,
+	baseURL string,
+	authStore *storage.SQLiteAuthStore,
+	token string,
+) {
+	t.Helper()
+	ctx := context.Background()
+	adminUser, gErr := authStore.GetUser(ctx, "admin")
+	if gErr != nil {
+		t.Fatalf("fetching admin: %v", gErr)
+	}
+	adminUser.Role = auth.RoleViewer
+	if uErr := authStore.UpdateUser(ctx, adminUser); uErr != nil {
+		t.Fatalf("demoting admin to viewer: %v", uErr)
+	}
+
+	// Viewer cannot access /api/v1/tokens (lacks tokens:read): must be 403
+	req, rErr := http.NewRequestWithContext(
+		ctx,
+		http.MethodGet,
+		baseURL+"/api/v1/tokens",
+		nil,
+	)
+	if rErr != nil {
+		t.Fatalf("creating demoted req: %v", rErr)
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, dErr := client.Do(req)
+	if dErr != nil {
+		t.Fatalf("doing demoted admin req: %v", dErr)
+	}
+	defer closeBody(t, resp)
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf(
+			"expected 403 for demoted owner PAT, got %d",
+			resp.StatusCode,
+		)
+	}
+
+	// Restore admin role
+	adminUser.Role = auth.RoleAdmin
+	if uErr := authStore.UpdateUser(ctx, adminUser); uErr != nil {
+		t.Fatalf("restoring admin: %v", uErr)
+	}
+}
+
+func testOwnerDeletionRejection(
+	t *testing.T,
+	client *http.Client,
+	baseURL string,
+	authStore *storage.SQLiteAuthStore,
+	token string,
+) {
+	t.Helper()
+	ctx := context.Background()
+	if delErr := authStore.DeleteUser(ctx, "tempuser"); delErr != nil {
+		t.Fatalf("deleting tempuser: %v", delErr)
+	}
+
+	req, rErr := http.NewRequestWithContext(
+		ctx,
+		http.MethodGet,
+		baseURL+"/api/v1/tokens",
+		nil,
+	)
+	if rErr != nil {
+		t.Fatalf("creating deleted owner req: %v", rErr)
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, dErr := client.Do(req)
+	if dErr != nil {
+		t.Fatalf("doing deleted owner req: %v", dErr)
+	}
+	defer closeBody(t, resp)
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf(
+			"expected 401 for deleted owner PAT, got %d",
 			resp.StatusCode,
 		)
 	}

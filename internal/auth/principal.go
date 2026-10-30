@@ -58,6 +58,45 @@ var ErrForbidden = errors.New(
 	"forbidden: insufficient role or scope permissions",
 )
 
+// ValidScopes lists all approved discrete action scopes and wildcards.
+var ValidScopes = []string{
+	"*",
+	"tokens:*", "tokens:read", "tokens:write",
+	"users:*", "users:read", "users:write",
+	"account:*", "account:read", "account:write",
+	"system:*", "system:read", "system:admin",
+}
+
+// IsValidScope reports whether a scope string conforms to the approved
+// vocabulary.
+func IsValidScope(scope string) bool {
+	switch scope {
+	case "*",
+		"tokens:*", "tokens:read", "tokens:write",
+		"users:*", "users:read", "users:write",
+		"account:*", "account:read", "account:write",
+		"system:*", "system:read", "system:admin":
+		return true
+	default:
+		return false
+	}
+}
+
+// RoleRank returns the relative privilege tier of a role for ceiling
+// comparisons (Admin > Maintainer/Operator > Viewer).
+func RoleRank(r Role) int {
+	switch r {
+	case RoleAdmin:
+		return 3
+	case RoleMaintainer, RoleOperator:
+		return 2
+	case RoleViewer:
+		return 1
+	default:
+		return 0
+	}
+}
+
 // Principal represents the authenticated actor making a request across any
 // transport.
 type Principal struct {

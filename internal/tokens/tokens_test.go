@@ -107,7 +107,7 @@ func TestTokenService_CreateAndValidate(t *testing.T) {
 		Username:  "operator",
 		Name:      "laptop-cli",
 		Role:      auth.RoleOperator,
-		Scopes:    []string{"read", "write"},
+		Scopes:    []string{"tokens:read", "tokens:write"},
 		ExpiresIn: 24 * time.Hour,
 	})
 	if err != nil {
@@ -160,10 +160,14 @@ func TestTokenService_CreateTokenRequiresExistingUser(t *testing.T) {
 	userStore := storage.NewSQLiteAuthStore(engine)
 	tokenStore := storage.NewSQLiteTokenStore(engine)
 	service := tokens.NewTokenService(tokenStore, userStore)
-	_, err := service.CreateToken(context.Background(), tokens.CreateTokenCommand{
-		Username: "missing-user",
-		Name:     "must-not-be-created",
-	})
+	_, err := service.CreateToken(
+		context.Background(),
+		tokens.CreateTokenCommand{
+			Username: "missing-user",
+			Name:     "must-not-be-created",
+			Scopes:   []string{"*"},
+		},
+	)
 	if !errors.Is(err, auth.ErrUserNotFound) {
 		t.Fatalf("expected auth.ErrUserNotFound, got %v", err)
 	}
@@ -203,6 +207,7 @@ func TestTokenService_Revocation(t *testing.T) {
 		Username: "operator",
 		Name:     "revoke-target",
 		Role:     auth.RoleOperator,
+		Scopes:   []string{"tokens:read"},
 	})
 	if err != nil {
 		t.Fatalf("creating token: %v", err)
@@ -284,6 +289,7 @@ func TestTokenService_Concurrency(t *testing.T) {
 		Username: "alice",
 		Name:     "concurrent-key",
 		Role:     auth.RoleAdmin,
+		Scopes:   []string{"*"},
 	})
 	if err != nil {
 		t.Fatalf("creating token: %v", err)
@@ -313,5 +319,353 @@ func TestTokenService_Concurrency(t *testing.T) {
 
 	for e := range errCh {
 		t.Errorf("concurrent validation error: %v", e)
+	}
+}
+
+func TestValidateScopes(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		scopes    []string
+		want      []string
+		wantErrIs error
+	}{
+		{
+			name:      "empty slice",
+			scopes:    []string{},
+			wantErrIs: tokens.ErrScopesRequired,
+		},
+		{
+			name:      "nil slice",
+			scopes:    nil,
+			wantErrIs: tokens.ErrScopesRequired,
+		},
+		{
+			name:      "whitespace only elements",
+			scopes:    []string{"", "   ", "\t"},
+			wantErrIs: tokens.ErrScopesRequired,
+		},
+		{
+			name:   "wildcard",
+			scopes: []string{"*"},
+			want:   []string{"*"},
+		},
+		{
+			name:   "valid discrete scopes",
+			scopes: []string{"tokens:read", "tokens:write", "users:read"},
+			want:   []string{"tokens:read", "tokens:write", "users:read"},
+		},
+		{
+			name:   "deduplication",
+			scopes: []string{"tokens:read", "tokens:read", "tokens:write"},
+			want:   []string{"tokens:read", "tokens:write"},
+		},
+		{
+			name:   "whitespace trimming",
+			scopes: []string{"  tokens:read  ", " system:read "},
+			want:   []string{"tokens:read", "system:read"},
+		},
+		{
+			name:      "invalid scope syntax",
+			scopes:    []string{"not_a_valid_scope"},
+			wantErrIs: tokens.ErrInvalidScope,
+		},
+		{
+			name:      "invalid mixed with valid",
+			scopes:    []string{"tokens:read", "invalid:scope"},
+			wantErrIs: tokens.ErrInvalidScope,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := tokens.ValidateScopes(tc.scopes)
+			if tc.wantErrIs != nil {
+				if err == nil {
+					t.Fatalf("expected error, got nil")
+				}
+				if !errors.Is(err, tc.wantErrIs) {
+					t.Fatalf(
+						"expected error is %v, got: %v",
+						tc.wantErrIs,
+						err,
+					)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if len(got) != len(tc.want) {
+				t.Fatalf(
+					"expected len %d, got %d (%v)",
+					len(tc.want),
+					len(got),
+					got,
+				)
+			}
+			for i := range got {
+				if got[i] != tc.want[i] {
+					t.Errorf(
+						"idx %d: want %s, got %s",
+						i,
+						tc.want[i],
+						got[i],
+					)
+				}
+			}
+		})
+	}
+}
+
+func TestTokenService_ScopesRequiredAndValidated(t *testing.T) {
+	t.Parallel()
+	db := setupTestDB(t)
+	defer func() {
+		if cErr := db.Close(); cErr != nil {
+			t.Errorf("closing test db: %v", cErr)
+		}
+	}()
+
+	store := storage.NewSQLiteTokenStore(db)
+	svc := tokens.NewTokenService(store, storage.NewSQLiteAuthStore(db))
+	ctx := context.Background()
+
+	// 1. Empty scopes rejected
+	_, err := svc.CreateToken(ctx, tokens.CreateTokenCommand{
+		Username: "operator",
+		Name:     "empty-scopes-pat",
+		Role:     auth.RoleOperator,
+		Scopes:   []string{},
+	})
+	if !errors.Is(err, tokens.ErrScopesRequired) {
+		t.Fatalf("expected ErrScopesRequired, got: %v", err)
+	}
+
+	// 2. Unrecognized scope rejected
+	_, err = svc.CreateToken(ctx, tokens.CreateTokenCommand{
+		Username: "operator",
+		Name:     "invalid-scope-pat",
+		Role:     auth.RoleOperator,
+		Scopes:   []string{"arbitrary:scope"},
+	})
+	if !errors.Is(err, tokens.ErrInvalidScope) {
+		t.Fatalf("expected ErrInvalidScope, got: %v", err)
+	}
+}
+
+func TestTokenService_InactiveAndDeletedOwner(t *testing.T) {
+	t.Parallel()
+	db := setupTestDB(t)
+	defer func() {
+		if cErr := db.Close(); cErr != nil {
+			t.Errorf("closing test db: %v", cErr)
+		}
+	}()
+
+	authStore := storage.NewSQLiteAuthStore(db)
+	store := storage.NewSQLiteTokenStore(db)
+	svc := tokens.NewTokenService(store, authStore)
+	ctx := context.Background()
+
+	// Seed inactive user
+	inactiveUser := auth.User{
+		Username: "disabled-user",
+		Role:     auth.RoleOperator,
+		IsActive: false,
+	}
+	if err := authStore.CreateUser(ctx, &inactiveUser); err != nil {
+		t.Fatalf("creating inactive user: %v", err)
+	}
+
+	// 1. Create token for inactive user fails
+	_, err := svc.CreateToken(ctx, tokens.CreateTokenCommand{
+		Username: "disabled-user",
+		Name:     "disabled-token",
+		Scopes:   []string{"*"},
+	})
+	if !errors.Is(err, tokens.ErrOwnerInactive) {
+		t.Fatalf("expected ErrOwnerInactive on create, got: %v", err)
+	}
+
+	// 2. Active user creates token, then user is disabled
+	res, err := svc.CreateToken(ctx, tokens.CreateTokenCommand{
+		Username: "operator",
+		Name:     "operator-pat",
+		Scopes:   []string{"tokens:read"},
+	})
+	if err != nil {
+		t.Fatalf("creating token: %v", err)
+	}
+
+	// Validate succeeds initially
+	if _, vErr := svc.ValidateToken(
+		ctx,
+		res.RawToken,
+		"10.0.0.1",
+	); vErr != nil {
+		t.Fatalf("unexpected validation error: %v", vErr)
+	}
+
+	// Deactivate user
+	opUser, gErr := authStore.GetUser(ctx, "operator")
+	if gErr != nil {
+		t.Fatalf("getting operator user: %v", gErr)
+	}
+	opUser.IsActive = false
+	if uErr := authStore.UpdateUser(ctx, opUser); uErr != nil {
+		t.Fatalf("deactivating operator: %v", uErr)
+	}
+
+	// Validate fails for deactivated user
+	_, vErr := svc.ValidateToken(ctx, res.RawToken, "10.0.0.1")
+	if !errors.Is(vErr, tokens.ErrOwnerInactive) {
+		t.Fatalf("expected ErrOwnerInactive on validate, got: %v", vErr)
+	}
+
+	// 3. User is deleted: validate fails closed
+	resAlice, err := svc.CreateToken(ctx, tokens.CreateTokenCommand{
+		Username: "alice",
+		Name:     "alice-pat",
+		Scopes:   []string{"*"},
+	})
+	if err != nil {
+		t.Fatalf("creating alice token: %v", err)
+	}
+	if dErr := authStore.DeleteUser(ctx, "alice"); dErr != nil {
+		t.Fatalf("deleting alice: %v", dErr)
+	}
+
+	_, vErr = svc.ValidateToken(ctx, resAlice.RawToken, "10.0.0.1")
+	if vErr == nil {
+		t.Fatal("expected error validating token for deleted user, got nil")
+	}
+}
+
+func TestTokenService_OwnerRoleCeilingAndDynamicUpdates(t *testing.T) {
+	t.Parallel()
+	db := setupTestDB(t)
+	defer func() {
+		if cErr := db.Close(); cErr != nil {
+			t.Errorf("closing test db: %v", cErr)
+		}
+	}()
+
+	authStore := storage.NewSQLiteAuthStore(db)
+	store := storage.NewSQLiteTokenStore(db)
+	svc := tokens.NewTokenService(store, authStore)
+	ctx := context.Background()
+
+	// 1. Cannot elevate operator even if token created with admin role
+	rawOpTok := testTokenCannotElevateOperator(ctx, t, svc)
+
+	// 2. Owner demotion immediately reduces effective role permissions
+	testTokenOwnerDemotion(ctx, t, svc, authStore)
+
+	// 3. Owner promotion reflects higher role immediately
+	testTokenOwnerPromotion(ctx, t, svc, authStore, rawOpTok)
+}
+
+func testTokenCannotElevateOperator(
+	ctx context.Context,
+	t *testing.T,
+	svc *tokens.TokenService,
+) string {
+	t.Helper()
+	res, err := svc.CreateToken(ctx, tokens.CreateTokenCommand{
+		Username: "operator",
+		Name:     "elevated-attempt",
+		Role:     auth.RoleAdmin,
+		Scopes:   []string{"*"},
+	})
+	if err != nil {
+		t.Fatalf("creating token: %v", err)
+	}
+	if res.Token.Role != auth.RoleOperator {
+		t.Fatalf(
+			"expected role capped to operator, got %s",
+			res.Token.Role,
+		)
+	}
+
+	tok, vErr := svc.ValidateToken(ctx, res.RawToken, "127.0.0.1")
+	if vErr != nil {
+		t.Fatalf("validating token: %v", vErr)
+	}
+	if tok.Role != auth.RoleOperator {
+		t.Fatalf("expected validated role operator, got %s", tok.Role)
+	}
+	return res.RawToken
+}
+
+func testTokenOwnerDemotion(
+	ctx context.Context,
+	t *testing.T,
+	svc *tokens.TokenService,
+	authStore *storage.SQLiteAuthStore,
+) {
+	t.Helper()
+	aliceRes, err := svc.CreateToken(ctx, tokens.CreateTokenCommand{
+		Username: "alice",
+		Name:     "alice-pat",
+		Role:     auth.RoleAdmin,
+		Scopes:   []string{"*"},
+	})
+	if err != nil {
+		t.Fatalf("creating alice token: %v", err)
+	}
+	aliceTok, vErr := svc.ValidateToken(ctx, aliceRes.RawToken, "127.0.0.1")
+	if vErr != nil {
+		t.Fatalf("validating alice token: %v", vErr)
+	}
+	if aliceTok.Role != auth.RoleAdmin {
+		t.Fatalf("expected role admin, got %s", aliceTok.Role)
+	}
+
+	aliceUser, gErr := authStore.GetUser(ctx, "alice")
+	if gErr != nil {
+		t.Fatalf("fetching alice: %v", gErr)
+	}
+	aliceUser.Role = auth.RoleViewer
+	if uErr := authStore.UpdateUser(ctx, aliceUser); uErr != nil {
+		t.Fatalf("demoting alice: %v", uErr)
+	}
+
+	demotedTok, dErr := svc.ValidateToken(ctx, aliceRes.RawToken, "127.0.0.1")
+	if dErr != nil {
+		t.Fatalf("validating demoted alice token: %v", dErr)
+	}
+	if demotedTok.Role != auth.RoleViewer {
+		t.Fatalf("expected role viewer after demote, got %s", demotedTok.Role)
+	}
+}
+
+func testTokenOwnerPromotion(
+	ctx context.Context,
+	t *testing.T,
+	svc *tokens.TokenService,
+	authStore *storage.SQLiteAuthStore,
+	rawToken string,
+) {
+	t.Helper()
+	opUser, gErr := authStore.GetUser(ctx, "operator")
+	if gErr != nil {
+		t.Fatalf("fetching operator: %v", gErr)
+	}
+	opUser.Role = auth.RoleAdmin
+	if uErr := authStore.UpdateUser(ctx, opUser); uErr != nil {
+		t.Fatalf("promoting operator: %v", uErr)
+	}
+
+	promotedTok, pErr := svc.ValidateToken(ctx, rawToken, "127.0.0.1")
+	if pErr != nil {
+		t.Fatalf("validating promoted operator token: %v", pErr)
+	}
+	if promotedTok.Role != auth.RoleAdmin {
+		t.Fatalf(
+			"expected role admin after promote, got %s",
+			promotedTok.Role,
+		)
 	}
 }
