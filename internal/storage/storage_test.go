@@ -19,6 +19,7 @@ import (
 
 	"gotcode.org/crucible/internal/config"
 	"gotcode.org/crucible/internal/id"
+	"gotcode.org/crucible/internal/tokens"
 )
 
 func TestSQLiteAdapter_DoesNotExportSQLAccess(t *testing.T) {
@@ -693,6 +694,73 @@ WHERE revoked = 0
 	}
 }
 
+func verifyReviewTokenStateGuard(
+	ctx context.Context,
+	t *testing.T,
+	tokenStore *SQLiteTokenStore,
+) {
+	t.Helper()
+	// 1. Reviewing an already reviewed token must return
+	// ErrTokenReviewNotRequired.
+	errAlready := tokenStore.ReviewToken(
+		ctx,
+		"tok_wildcard",
+		"admin_reviewer",
+		time.Now().UTC(),
+	)
+	if !errors.Is(errAlready, tokens.ErrTokenReviewNotRequired) {
+		t.Fatalf(
+			"expected ErrTokenReviewNotRequired on reviewed "+
+				"token, got %v",
+			errAlready,
+		)
+	}
+
+	// 2. Reviewing a token that was never flagged for review must return
+	// ErrTokenReviewNotRequired.
+	errNever := tokenStore.ReviewToken(
+		ctx,
+		"tok_discrete",
+		"admin_reviewer",
+		time.Now().UTC(),
+	)
+	if !errors.Is(errNever, tokens.ErrTokenReviewNotRequired) {
+		t.Fatalf(
+			"expected ErrTokenReviewNotRequired on discrete "+
+				"token, got %v",
+			errNever,
+		)
+	}
+
+	// 3. Reviewing non-existent token must return ErrTokenNotFound.
+	errMissing := tokenStore.ReviewToken(
+		ctx,
+		"tok_nonexistent",
+		"admin_reviewer",
+		time.Now().UTC(),
+	)
+	if !errors.Is(errMissing, tokens.ErrTokenNotFound) {
+		t.Fatalf(
+			"expected ErrTokenNotFound on missing token, got %v",
+			errMissing,
+		)
+	}
+
+	// 4. Reviewing revoked token must return ErrTokenNotFound.
+	errRevoked := tokenStore.ReviewToken(
+		ctx,
+		"tok_revoked",
+		"admin_reviewer",
+		time.Now().UTC(),
+	)
+	if !errors.Is(errRevoked, tokens.ErrTokenNotFound) {
+		t.Fatalf(
+			"expected ErrTokenNotFound on revoked token, got %v",
+			errRevoked,
+		)
+	}
+}
+
 func TestStorage_LegacyWildcardPATReviewMigration_FixtureAndIdempotency(
 	t *testing.T,
 ) {
@@ -728,4 +796,5 @@ func TestStorage_LegacyWildcardPATReviewMigration_FixtureAndIdempotency(
 	}
 
 	verifyTokenReviewAuditState(ctx, t, tokenStore, adapter)
+	verifyReviewTokenStateGuard(ctx, t, tokenStore)
 }

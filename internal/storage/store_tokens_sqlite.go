@@ -229,6 +229,9 @@ WHERE id = ? AND revoked = 0`
 }
 
 // ReviewToken confirms a review-required token and records reviewer audit.
+// It updates only tokens where requires_review = 1 and returns
+// ErrTokenReviewNotRequired if the token exists and is unrevoked but does
+// not require review.
 func (s *SQLiteTokenStore) ReviewToken(
 	ctx context.Context,
 	id string,
@@ -239,7 +242,7 @@ func (s *SQLiteTokenStore) ReviewToken(
 	query := `
 UPDATE api_tokens
 SET requires_review = 0, reviewed_at = ?, reviewed_by = ?
-WHERE id = ? AND revoked = 0`
+WHERE id = ? AND revoked = 0 AND requires_review = 1`
 
 	res, err := s.db.ExecContext(ctx, query, atStr, reviewedBy, id)
 	if err != nil {
@@ -250,6 +253,16 @@ WHERE id = ? AND revoked = 0`
 		return fmt.Errorf("checking review rows affected: %w", err)
 	}
 	if rows == 0 {
+		tok, gErr := s.GetTokenByID(ctx, id)
+		if gErr != nil {
+			return gErr
+		}
+		if tok.Revoked {
+			return tokendomain.ErrTokenNotFound
+		}
+		if !tok.RequiresReview {
+			return tokendomain.ErrTokenReviewNotRequired
+		}
 		return tokendomain.ErrTokenNotFound
 	}
 	return nil

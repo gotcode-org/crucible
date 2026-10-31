@@ -53,6 +53,12 @@ var (
 	ErrTokenRequiresReview = errors.New(
 		"personal access token requires review before use",
 	)
+
+	// ErrTokenReviewNotRequired indicates the token does not require
+	// security review.
+	ErrTokenReviewNotRequired = errors.New(
+		"personal access token does not require review",
+	)
 )
 
 // APIToken represents a persistent Personal Access Token (PAT) record in the

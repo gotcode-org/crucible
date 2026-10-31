@@ -846,6 +846,19 @@ func verifyTokenReviewAndUnblock(
 	if validTok.LastUsedAt == nil {
 		t.Fatalf("expected last_used_at to be populated after success")
 	}
+
+	dupErr := svc.ReviewToken(ctx, tokens.ReviewTokenCommand{
+		ID:       tokenID,
+		Reviewer: "alice",
+		IsAdmin:  false,
+	})
+	if !errors.Is(dupErr, tokens.ErrTokenReviewNotRequired) {
+		t.Fatalf(
+			"expected ErrTokenReviewNotRequired on second "+
+				"review, got %v",
+			dupErr,
+		)
+	}
 }
 
 func verifyAdminReviewOfOperatorToken(

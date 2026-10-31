@@ -3713,6 +3713,38 @@ func reviewLegacyTokenOverUnix(
 	if revResp.StatusCode != http.StatusOK {
 		t.Fatalf("review status = %d, want 200", revResp.StatusCode)
 	}
+
+	dupReq, err := http.NewRequestWithContext(
+		ctx,
+		http.MethodPost,
+		"http://unix/api/v1/tokens/review",
+		strings.NewReader(reviewPayload),
+	)
+	if err != nil {
+		t.Fatalf("creating duplicate review request: %v", err)
+	}
+	dupReq.Header.Set("Content-Type", "application/json")
+	dupResp, dErr := unixClient.Do(dupReq)
+	if dErr != nil {
+		t.Fatalf("duplicate review request failed: %v", dErr)
+	}
+	defer closeBody(t, dupResp)
+	if dupResp.StatusCode != http.StatusBadRequest {
+		t.Fatalf(
+			"duplicate review status = %d, want 400",
+			dupResp.StatusCode,
+		)
+	}
+	dupBytes, bErr := io.ReadAll(dupResp.Body)
+	if bErr != nil {
+		t.Fatalf("reading duplicate review response: %v", bErr)
+	}
+	if !strings.Contains(string(dupBytes), "does not require review") {
+		t.Fatalf(
+			"expected duplicate review rejection message, got: %s",
+			string(dupBytes),
+		)
+	}
 }
 
 func assertReviewedTokenPermitted(

@@ -497,7 +497,8 @@ or an administrator.
       "id": "tok_01j78tok1..."
     }
     ```
-  - `400 Bad Request`: Missing token ID or token is revoked.
+  - `400 Bad Request`: Missing token ID, token revoked, or token does not
+    require review.
   - `403 Forbidden`: Authenticated user is neither token owner nor admin.
   - `404 Not Found`: Token does not exist.
 

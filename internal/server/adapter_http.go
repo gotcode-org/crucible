@@ -2881,7 +2881,8 @@ func (s *HTTPServer) handleAPITokensReview(
 			http.Error(w, "Forbidden", http.StatusForbidden)
 			return
 		}
-		if errors.Is(rErr, tokens.ErrTokenRevoked) {
+		if errors.Is(rErr, tokens.ErrTokenRevoked) ||
+			errors.Is(rErr, tokens.ErrTokenReviewNotRequired) {
 			http.Error(w, rErr.Error(), http.StatusBadRequest)
 			return
 		}

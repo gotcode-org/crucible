@@ -269,6 +269,9 @@ func (s *TokenService) ReviewToken(
 	if tok.Revoked {
 		return ErrTokenRevoked
 	}
+	if !tok.RequiresReview {
+		return ErrTokenReviewNotRequired
+	}
 
 	// Only the token's owner or an administrator can review/reconfirm it.
 	if !cmd.IsAdmin && tok.Username != reviewer {

@@ -417,6 +417,48 @@ func TestTokenCommand_Review(t *testing.T) {
 	}
 }
 
+func TestTokenCommand_Review_NotRequired(t *testing.T) {
+	t.Parallel()
+
+	mockServer := httptest.NewServer(
+		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != "/api/v1/tokens/review" ||
+				r.Method != http.MethodPost {
+				http.Error(w, "not found", http.StatusNotFound)
+				return
+			}
+			http.Error(
+				w,
+				"personal access token "+
+					"does not require review",
+				http.StatusBadRequest,
+			)
+		}),
+	)
+	defer mockServer.Close()
+
+	cmd := newRootCmd()
+	var buf bytes.Buffer
+	cmd.SetOut(&buf)
+	cmd.SetErr(&buf)
+	cmd.SetArgs([]string{
+		"token", "review", "tok_01NO_REVIEW",
+		"--server", mockServer.URL,
+		"--token", "cb_pat_valid",
+	})
+
+	err := cmd.ExecuteContext(context.Background())
+	if err == nil {
+		t.Fatal(
+			"expected error on token not requiring review, " +
+				"got nil",
+		)
+	}
+	if !strings.Contains(err.Error(), "does not require review") {
+		t.Errorf("unexpected error message: %v", err)
+	}
+}
+
 func TestTokenCommand_List_ReviewRequired(t *testing.T) {
 	t.Parallel()
 

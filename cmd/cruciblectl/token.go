@@ -503,6 +503,10 @@ func tokenReviewCmd() *cobra.Command {
 					tokenID,
 				)
 			}
+			if resp.StatusCode == http.StatusBadRequest {
+				body := readResponseBody(resp.Body)
+				return fmt.Errorf("bad request: %s", body)
+			}
 			if resp.StatusCode != http.StatusOK {
 				body := readResponseBody(resp.Body)
 				return fmt.Errorf(

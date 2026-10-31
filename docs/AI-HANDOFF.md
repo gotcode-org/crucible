@@ -67,6 +67,9 @@ fail-closed transition:
      and action buttons for confirmation or revocation.
    - CLI: `cruciblectl token review <id>` for operator workflows.
    - Records reviewer username and UTC timestamp upon reconfirmation.
+   - Enforces review-state guard: updates only tokens where
+     `requires_review = 1`; returns `ErrTokenReviewNotRequired` (HTTP 400)
+     if review is not required.
 
 4. **Operator Audit Tooling (Safe Metadata Only)**:
    - CLI: `cruciblectl token audit` and
