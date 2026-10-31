@@ -134,6 +134,7 @@
                   class="w-2 h-2 rounded-full
                     {{ if eq .Status "active" }}bg-emerald-400
                     {{ else if eq .Status "expired" }}bg-amber-400
+                    {{ else if eq .Status "review_required" }}bg-amber-400
                     {{ else }}bg-zinc-600{{ end }}"
                 ></span>
                 <span>{{ .Name }}</span>
@@ -194,12 +195,45 @@
               <span class="text-emerald-400">ACTIVE</span>
               {{ else if eq .Status "expired" }}
               <span class="text-amber-400">EXPIRED</span>
+              {{ else if eq .Status "review_required" }}
+              <span class="text-amber-400 font-bold">REVIEW REQ</span>
               {{ else }}
               <span class="text-zinc-500">REVOKED</span>
               {{ end }}
             </td>
             <td class="px-6 py-3 text-right">
-              {{ if eq .Status "active" }}
+              {{ if eq .Status "review_required" }}
+              <form
+                action="/settings/tokens/review"
+                method="POST"
+                class="inline mr-2"
+                onsubmit="return confirm('Confirm token {{ .Name }}?');"
+              >
+                <input type="hidden" name="token_id" value="{{ .ID }}" />
+                <button
+                  type="submit"
+                  class="text-amber-400 hover:text-amber-300 hover:underline
+                    cursor-pointer"
+                >
+                  Confirm
+                </button>
+              </form>
+              <form
+                action="/settings/tokens/revoke"
+                method="POST"
+                class="inline"
+                onsubmit="return confirm('Revoke token {{ .Name }}?');"
+              >
+                <input type="hidden" name="token_id" value="{{ .ID }}" />
+                <button
+                  type="submit"
+                  class="text-rose-400 hover:text-rose-300 hover:underline
+                    cursor-pointer"
+                >
+                  Revoke
+                </button>
+              </form>
+              {{ else if eq .Status "active" }}
               <form
                 action="/settings/tokens/revoke"
                 method="POST"

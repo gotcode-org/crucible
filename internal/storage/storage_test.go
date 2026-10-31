@@ -8,8 +8,11 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
+	"io/fs"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 	"testing/fstest"
 	"time"
@@ -76,8 +79,8 @@ func TestSQLiteAdapter_ConcurrentMigrationStartup(t *testing.T) {
 	).Scan(&count); err != nil {
 		t.Fatalf("querying migration count: %v", err)
 	}
-	if count != 5 {
-		t.Fatalf("migration count = %d, want 5", count)
+	if count != 6 {
+		t.Fatalf("migration count = %d, want 6", count)
 	}
 }
 
@@ -300,11 +303,17 @@ func TestStorage_CommandAndQueryServices(t *testing.T) {
 	if err != nil {
 		t.Fatalf("querySvc.GetDatabaseStatus() post-migration error: %v", err)
 	}
-	if st2.MigrationCount != 5 {
-		t.Errorf("expected MigrationCount = 5, got %d", st2.MigrationCount)
+	if st2.MigrationCount != 6 {
+		t.Errorf(
+			"expected MigrationCount = 6, got %d",
+			st2.MigrationCount,
+		)
 	}
-	if st2.LatestVersion != 5 {
-		t.Errorf("expected LatestVersion = 5, got %d", st2.LatestVersion)
+	if st2.LatestVersion != 6 {
+		t.Errorf(
+			"expected LatestVersion = 6, got %d",
+			st2.LatestVersion,
+		)
 	}
 	if st2.TablesCount < 18 {
 		t.Errorf("expected >= 18 tables, got %d", st2.TablesCount)
@@ -514,4 +523,209 @@ func TestTransactor_CommitAndRollback(t *testing.T) {
 			rollbackCount,
 		)
 	}
+}
+
+func buildPartialSchemaFS(t *testing.T, maxVer int) fstest.MapFS {
+	t.Helper()
+	subFS, err := fs.Sub(embeddedSQLiteSchemaFS, "schema")
+	if err != nil {
+		t.Fatalf("accessing embedded schema: %v", err)
+	}
+
+	partialFS := make(fstest.MapFS)
+	for i := 1; i <= maxVer; i++ {
+		entries, rErr := fs.ReadDir(subFS, ".")
+		if rErr != nil {
+			t.Fatalf("reading embedded schema: %v", rErr)
+		}
+		for _, e := range entries {
+			prefix := fmt.Sprintf("%03d_", i)
+			if strings.HasPrefix(e.Name(), prefix) {
+				data, readErr := fs.ReadFile(subFS, e.Name())
+				if readErr != nil {
+					t.Fatalf(
+						"reading %s: %v",
+						e.Name(),
+						readErr,
+					)
+				}
+				partialFS[e.Name()] = &fstest.MapFile{
+					Data: data,
+				}
+			}
+		}
+	}
+	return partialFS
+}
+
+func seedLegacyTokenFixture(
+	ctx context.Context,
+	t *testing.T,
+	adapter *SQLiteAdapter,
+) {
+	t.Helper()
+	_, err := adapter.db.ExecContext(ctx, `
+INSERT INTO users (
+	username, password_hash, role, is_active, must_change_password
+) VALUES ('legacy_user', 'hash', 'admin', 1, 0)`)
+	if err != nil {
+		t.Fatalf("seeding user: %v", err)
+	}
+
+	seedQuery := `
+INSERT INTO api_tokens (
+	id, name, token_prefix, token_hash, username, role, scopes_json,
+	created_at, revoked
+) VALUES
+('tok_wildcard', 'Wildcard', 'cb_pat_1', 'hash1', 'legacy_user', 'admin',
+ '["*"]', CURRENT_TIMESTAMP, 0),
+('tok_multi', 'MultiWild', 'cb_pat_2', 'hash2', 'legacy_user', 'admin',
+ '["*","tokens:read"]', CURRENT_TIMESTAMP, 0),
+('tok_discrete', 'Discrete', 'cb_pat_3', 'hash3', 'legacy_user', 'admin',
+ '["tokens:read"]', CURRENT_TIMESTAMP, 0),
+('tok_empty', 'Empty', 'cb_pat_4', 'hash4', 'legacy_user', 'admin',
+ '[]', CURRENT_TIMESTAMP, 0),
+('tok_malformed', 'BadJSON', 'cb_pat_5', 'hash5', 'legacy_user', 'admin',
+ 'malformed-json', CURRENT_TIMESTAMP, 0),
+('tok_revoked', 'Revoked', 'cb_pat_6', 'hash6', 'legacy_user', 'admin',
+ '["*"]', CURRENT_TIMESTAMP, 1)`
+	if _, sErr := adapter.db.ExecContext(ctx, seedQuery); sErr != nil {
+		t.Fatalf("seeding legacy token fixture: %v", sErr)
+	}
+}
+
+func assertLegacyTokensReviewState(
+	ctx context.Context,
+	t *testing.T,
+	tokenStore *SQLiteTokenStore,
+) {
+	t.Helper()
+	toks, lErr := tokenStore.ListUserTokens(ctx, "legacy_user")
+	if lErr != nil {
+		t.Fatalf("listing tokens: %v", lErr)
+	}
+
+	expectedReview := map[string]bool{
+		"tok_wildcard":  true,
+		"tok_multi":     true,
+		"tok_discrete":  false,
+		"tok_empty":     false,
+		"tok_malformed": false,
+		"tok_revoked":   false,
+	}
+
+	for _, tok := range toks {
+		want, ok := expectedReview[tok.ID]
+		if !ok {
+			t.Errorf("unexpected token in result: %s", tok.ID)
+			continue
+		}
+		if tok.RequiresReview != want {
+			t.Errorf(
+				"token %s: RequiresReview = %v, want %v",
+				tok.ID,
+				tok.RequiresReview,
+				want,
+			)
+		}
+	}
+}
+
+func verifyTokenReviewAuditState(
+	ctx context.Context,
+	t *testing.T,
+	tokenStore *SQLiteTokenStore,
+	adapter *SQLiteAdapter,
+) {
+	t.Helper()
+	reviewTime := time.Now().UTC().Truncate(time.Second)
+	if revErr := tokenStore.ReviewToken(
+		ctx,
+		"tok_wildcard",
+		"admin_reviewer",
+		reviewTime,
+	); revErr != nil {
+		t.Fatalf("reviewing token: %v", revErr)
+	}
+
+	reviewedTok, gErr := tokenStore.GetTokenByID(ctx, "tok_wildcard")
+	if gErr != nil {
+		t.Fatalf("getting reviewed token: %v", gErr)
+	}
+	if reviewedTok.RequiresReview {
+		t.Errorf("expected RequiresReview = false after review")
+	}
+	if reviewedTok.ReviewedBy == nil ||
+		*reviewedTok.ReviewedBy != "admin_reviewer" {
+		t.Errorf(
+			"expected ReviewedBy = 'admin_reviewer', got %v",
+			reviewedTok.ReviewedBy,
+		)
+	}
+	if reviewedTok.ReviewedAt == nil {
+		t.Errorf("expected ReviewedAt to be set")
+	}
+
+	// Re-run migration SQL update directly to assert reviewed token
+	// is not reset.
+	_, execErr := adapter.db.ExecContext(ctx, `
+UPDATE api_tokens
+SET requires_review = 1
+WHERE revoked = 0
+  AND reviewed_at IS NULL
+  AND (
+      scopes_json LIKE '%"*"%'
+      OR (json_valid(scopes_json) AND json_extract(scopes_json, '$[0]') = '*')
+  );`)
+	if execErr != nil {
+		t.Fatalf("re-running update query: %v", execErr)
+	}
+
+	afterTok, gErr2 := tokenStore.GetTokenByID(ctx, "tok_wildcard")
+	if gErr2 != nil {
+		t.Fatalf("getting token after update: %v", gErr2)
+	}
+	if afterTok.RequiresReview {
+		t.Errorf(
+			"reviewed token was unexpectedly re-flagged " +
+				"as requiring review",
+		)
+	}
+}
+
+func TestStorage_LegacyWildcardPATReviewMigration_FixtureAndIdempotency(
+	t *testing.T,
+) {
+	t.Parallel()
+	ctx := context.Background()
+	dbPath := filepath.Join(t.TempDir(), "legacy-fixture.db")
+	adapter, err := NewSQLiteAdapterPath(ctx, dbPath, false, 5000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if closeErr := adapter.Close(); closeErr != nil {
+			t.Errorf("closing adapter: %v", closeErr)
+		}
+	}()
+
+	partialFS := buildPartialSchemaFS(t, 5)
+	if mErr := adapter.migrateFS(ctx, partialFS); mErr != nil {
+		t.Fatalf("migrating partial schema (1-5): %v", mErr)
+	}
+
+	seedLegacyTokenFixture(ctx, t, adapter)
+
+	if fullErr := adapter.Migrate(ctx); fullErr != nil {
+		t.Fatalf("running full migration 006: %v", fullErr)
+	}
+
+	tokenStore := NewSQLiteTokenStore(adapter)
+	assertLegacyTokensReviewState(ctx, t, tokenStore)
+
+	if rErr := adapter.Migrate(ctx); rErr != nil {
+		t.Fatalf("re-running migration (idempotency check): %v", rErr)
+	}
+
+	verifyTokenReviewAuditState(ctx, t, tokenStore, adapter)
 }

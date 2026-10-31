@@ -213,6 +213,12 @@ Format: `[state] (Priority) [domain/binary] Task description @assignee +tag`
       ∩ Scopes), reject inactive/deleted owner accounts, mandate explicit
       scopes on creation across CLI/Web/API, and fail closed on legacy scopes
       @jovens@gotcode.org +phase1 +auth +security
+- [x] (A) [auth] Close legacy wildcard PAT scope gap via fail-closed review
+      transition: add durable review tracking migration, fail closed on
+      validation before action authorization or telemetry touches, provide
+      explicit owner/admin reconfirmation (API, Web, and CLI), safe operator
+      audit tooling, and test fixtures @jovens@gotcode.org +phase1 +auth
+      +security
 - [ ] (A) [shared] Close the architecture stabilization gate: record each
       finding's disposition, complete tests and required checks, and do not
       start further feature milestones until confirmed Phase 1 fixes pass

@@ -50,6 +50,15 @@ type TokenStore interface {
 		username string,
 		at time.Time,
 	) error
+
+	// ReviewToken confirms a review-required token and records reviewer
+	// audit details.
+	ReviewToken(
+		ctx context.Context,
+		id string,
+		reviewedBy string,
+		at time.Time,
+	) error
 }
 
 // Service defines the inbound CQRS application service port for Personal
@@ -74,4 +83,8 @@ type Service interface {
 
 	// RevokeToken marks an operator's token as revoked.
 	RevokeToken(ctx context.Context, cmd RevokeTokenCommand) error
+
+	// ReviewToken confirms a review-required token after owner/admin
+	// review.
+	ReviewToken(ctx context.Context, cmd ReviewTokenCommand) error
 }

@@ -26,9 +26,11 @@ func TestTokenCommand_Help(t *testing.T) {
 		expected []string
 	}{
 		{
-			name:     "token_root_help",
-			args:     []string{"token", "--help"},
-			expected: []string{"create", "list", "revoke"},
+			name: "token_root_help",
+			args: []string{"token", "--help"},
+			expected: []string{
+				"create", "list", "revoke", "review", "audit",
+			},
 		},
 		{
 			name: "token_create_help",
@@ -38,14 +40,29 @@ func TestTokenCommand_Help(t *testing.T) {
 			},
 		},
 		{
-			name:     "token_list_help",
-			args:     []string{"token", "list", "--help"},
-			expected: []string{"--all", "--user", "--server"},
+			name: "token_list_help",
+			args: []string{"token", "list", "--help"},
+			expected: []string{
+				"--all",
+				"--user",
+				"--review-required",
+				"--server",
+			},
 		},
 		{
 			name:     "token_revoke_help",
 			args:     []string{"token", "revoke", "--help"},
 			expected: []string{"<token-id>", "--server"},
+		},
+		{
+			name:     "token_review_help",
+			args:     []string{"token", "review", "--help"},
+			expected: []string{"<token-id>", "--server"},
+		},
+		{
+			name:     "token_audit_help",
+			args:     []string{"token", "audit", "--help"},
+			expected: []string{"--server"},
 		},
 	}
 
@@ -331,5 +348,199 @@ func TestTokenCommand_RemoteTokenRequired(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "authentication token is required") {
 		t.Errorf("unexpected error message: %v", err)
+	}
+}
+
+func TestTokenCommand_Review(t *testing.T) {
+	t.Parallel()
+
+	mockServer := httptest.NewServer(
+		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != "/api/v1/tokens/review" ||
+				r.Method != http.MethodPost {
+				http.Error(w, "not found", http.StatusNotFound)
+				return
+			}
+			var req struct {
+				ID string `json:"id"`
+			}
+			if err := json.NewDecoder(
+				r.Body,
+			).Decode(&req); err != nil {
+				http.Error(
+					w,
+					err.Error(),
+					http.StatusBadRequest,
+				)
+				return
+			}
+			if req.ID != "tok_01TOREVIEW" {
+				http.Error(w, "not found", http.StatusNotFound)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			if encErr := json.NewEncoder(w).Encode(
+				map[string]string{
+					"status": "reviewed",
+					"id":     req.ID,
+				},
+			); encErr != nil {
+				t.Errorf(
+					"encoding review response: %v",
+					encErr,
+				)
+			}
+		}),
+	)
+	defer mockServer.Close()
+
+	cmd := newRootCmd()
+	var buf bytes.Buffer
+	cmd.SetOut(&buf)
+	cmd.SetErr(&buf)
+	cmd.SetArgs([]string{
+		"token", "review", "tok_01TOREVIEW",
+		"--server", mockServer.URL,
+		"--token", "cb_pat_valid",
+	})
+
+	if err := cmd.ExecuteContext(context.Background()); err != nil {
+		t.Fatalf("token review failed: %v", err)
+	}
+
+	out := buf.String()
+	if !strings.Contains(
+		out,
+		"Token tok_01TOREVIEW reviewed successfully.",
+	) {
+		t.Errorf("output missing expected review message: %s", out)
+	}
+}
+
+func TestTokenCommand_List_ReviewRequired(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now().UTC()
+	mockServer := httptest.NewServer(
+		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != "/api/v1/tokens" ||
+				r.Method != http.MethodGet {
+				http.Error(w, "not found", http.StatusNotFound)
+				return
+			}
+			if r.URL.Query().Get("review_required") != "true" {
+				http.Error(
+					w,
+					"bad request",
+					http.StatusBadRequest,
+				)
+				return
+			}
+			toks := []tokens.APIToken{
+				{
+					ID:             "tok_01LEGACY1",
+					Name:           "legacy-pat",
+					TokenPrefix:    "cb_pat_99887766",
+					Role:           "admin",
+					Username:       "alice",
+					CreatedAt:      now,
+					RequiresReview: true,
+				},
+			}
+			w.Header().Set("Content-Type", "application/json")
+			if encErr := json.NewEncoder(
+				w,
+			).Encode(toks); encErr != nil {
+				t.Errorf("encoding list response: %v", encErr)
+			}
+		}),
+	)
+	defer mockServer.Close()
+
+	cmd := newRootCmd()
+	var buf bytes.Buffer
+	cmd.SetOut(&buf)
+	cmd.SetErr(&buf)
+	cmd.SetArgs([]string{
+		"token", "list", "--review-required",
+		"--server", mockServer.URL,
+		"--token", "cb_pat_valid",
+	})
+
+	if err := cmd.ExecuteContext(context.Background()); err != nil {
+		t.Fatalf("token list --review-required failed: %v", err)
+	}
+
+	out := buf.String()
+	if !strings.Contains(out, "TOKEN ID") ||
+		!strings.Contains(out, "legacy-pat") ||
+		!strings.Contains(out, "review_required") {
+		t.Errorf("output missing review_required status: %s", out)
+	}
+}
+
+func TestTokenCommand_Audit(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now().UTC()
+	mockServer := httptest.NewServer(
+		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != "/api/v1/tokens" ||
+				r.Method != http.MethodGet {
+				http.Error(w, "not found", http.StatusNotFound)
+				return
+			}
+			if r.URL.Query().Get("review_required") != "true" ||
+				r.URL.Query().Get("all") != "true" {
+				http.Error(
+					w,
+					"bad request",
+					http.StatusBadRequest,
+				)
+				return
+			}
+			toks := []tokens.APIToken{
+				{
+					ID:             "tok_01AUDIT1",
+					Name:           "audit-legacy-pat",
+					TokenPrefix:    "cb_pat_44556677",
+					Role:           "operator",
+					Username:       "bob",
+					CreatedAt:      now,
+					RequiresReview: true,
+				},
+			}
+			w.Header().Set("Content-Type", "application/json")
+			if encErr := json.NewEncoder(
+				w,
+			).Encode(toks); encErr != nil {
+				t.Errorf("encoding list response: %v", encErr)
+			}
+		}),
+	)
+	defer mockServer.Close()
+
+	cmd := newRootCmd()
+	var buf bytes.Buffer
+	cmd.SetOut(&buf)
+	cmd.SetErr(&buf)
+	cmd.SetArgs([]string{
+		"token", "audit",
+		"--server", mockServer.URL,
+		"--token", "cb_pat_valid",
+	})
+
+	if err := cmd.ExecuteContext(context.Background()); err != nil {
+		t.Fatalf("token audit failed: %v", err)
+	}
+
+	out := buf.String()
+	if !strings.Contains(out, "TOKEN ID") ||
+		!strings.Contains(out, "audit-legacy-pat") ||
+		!strings.Contains(out, "review_required") {
+		t.Errorf(
+			"audit output missing expected token content: %s",
+			out,
+		)
 	}
 }

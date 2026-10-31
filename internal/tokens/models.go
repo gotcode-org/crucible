@@ -46,26 +46,36 @@ var (
 	ErrRoleExceedsCeiling = errors.New(
 		"requested token role exceeds owner role permissions",
 	)
+
+	// ErrTokenRequiresReview indicates the token has a legacy wildcard
+	// scope and must be explicitly reviewed and reconfirmed by its owner
+	// or an administrator.
+	ErrTokenRequiresReview = errors.New(
+		"personal access token requires review before use",
+	)
 )
 
 // APIToken represents a persistent Personal Access Token (PAT) record in the
 // database. The plaintext secret is never stored; only its SHA-256 hash is
 // persisted.
 type APIToken struct {
-	ID          string     `json:"id"`
-	Name        string     `json:"name"`
-	TokenPrefix string     `json:"token_prefix"`
-	TokenHash   string     `json:"-"`
-	Username    string     `json:"username"`
-	Role        auth.Role  `json:"role"`
-	OwnerRole   auth.Role  `json:"owner_role,omitempty"`
-	Scopes      []string   `json:"scopes"`
-	CreatedAt   time.Time  `json:"created_at"`
-	LastUsedAt  *time.Time `json:"last_used_at,omitempty"`
-	LastUsedIP  *string    `json:"last_used_ip,omitempty"`
-	ExpiresAt   *time.Time `json:"expires_at,omitempty"`
-	Revoked     bool       `json:"revoked"`
-	RevokedAt   *time.Time `json:"revoked_at,omitempty"`
+	ID             string     `json:"id"`
+	Name           string     `json:"name"`
+	TokenPrefix    string     `json:"token_prefix"`
+	TokenHash      string     `json:"-"`
+	Username       string     `json:"username"`
+	Role           auth.Role  `json:"role"`
+	OwnerRole      auth.Role  `json:"owner_role,omitempty"`
+	Scopes         []string   `json:"scopes"`
+	CreatedAt      time.Time  `json:"created_at"`
+	LastUsedAt     *time.Time `json:"last_used_at,omitempty"`
+	LastUsedIP     *string    `json:"last_used_ip,omitempty"`
+	ExpiresAt      *time.Time `json:"expires_at,omitempty"`
+	Revoked        bool       `json:"revoked"`
+	RevokedAt      *time.Time `json:"revoked_at,omitempty"`
+	RequiresReview bool       `json:"requires_review"`
+	ReviewedAt     *time.Time `json:"reviewed_at,omitempty"`
+	ReviewedBy     *string    `json:"reviewed_by,omitempty"`
 }
 
 // IsActive reports whether the token is currently valid and unexpired.
@@ -80,8 +90,8 @@ func (t APIToken) IsActive(now time.Time) bool {
 	return true
 }
 
-// Status returns a human-readable lifecycle state ("active", "expired", or
-// "revoked").
+// Status returns a human-readable lifecycle state ("active", "expired",
+// "revoked", or "review_required").
 func (t APIToken) Status() string {
 	if t.Revoked {
 		return "revoked"
@@ -89,6 +99,9 @@ func (t APIToken) Status() string {
 	if t.ExpiresAt != nil && !t.ExpiresAt.IsZero() &&
 		time.Now().UTC().After(*t.ExpiresAt) {
 		return "expired"
+	}
+	if t.RequiresReview {
+		return "review_required"
 	}
 	return "active"
 }
@@ -113,4 +126,11 @@ type CreateTokenResult struct {
 type RevokeTokenCommand struct {
 	ID       string
 	Username string
+}
+
+// ReviewTokenCommand contains parameters to confirm a review-required token.
+type ReviewTokenCommand struct {
+	ID       string
+	Reviewer string
+	IsAdmin  bool
 }

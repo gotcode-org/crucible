@@ -31,6 +31,8 @@ func tokenCmd() *cobra.Command {
 	cmd.AddCommand(tokenCreateCmd())
 	cmd.AddCommand(tokenListCmd())
 	cmd.AddCommand(tokenRevokeCmd())
+	cmd.AddCommand(tokenReviewCmd())
+	cmd.AddCommand(tokenAuditCmd())
 
 	return cmd
 }
@@ -197,11 +199,12 @@ func tokenCreateCmd() *cobra.Command {
 
 func tokenListCmd() *cobra.Command {
 	var (
-		all        bool
-		user       string
-		socketPath string
-		serverURL  string
-		token      string
+		all            bool
+		user           string
+		reviewRequired bool
+		socketPath     string
+		serverURL      string
+		token          string
 	)
 
 	cmd := &cobra.Command{
@@ -228,10 +231,18 @@ func tokenListCmd() *cobra.Command {
 			}
 
 			endpoint := "/api/v1/tokens"
+			var q []string
 			if all {
-				endpoint += "?all=true"
-			} else if user != "" {
-				endpoint += "?username=" + user
+				q = append(q, "all=true")
+			}
+			if user != "" {
+				q = append(q, "username="+user)
+			}
+			if reviewRequired {
+				q = append(q, "review_required=true")
+			}
+			if len(q) > 0 {
+				endpoint += "?" + strings.Join(q, "&")
 			}
 
 			resp, err := transport.Request(
@@ -285,6 +296,12 @@ func tokenListCmd() *cobra.Command {
 		"u",
 		"",
 		"Filter tokens by operator username (admin only)",
+	)
+	cmd.Flags().BoolVar(
+		&reviewRequired,
+		"review-required",
+		false,
+		"Filter tokens requiring explicit security review",
 	)
 	cmd.Flags().StringVar(
 		&socketPath,
@@ -386,6 +403,224 @@ func tokenRevokeCmd() *cobra.Command {
 			)
 			_, pErr := fmt.Fprintln(cmd.OutOrStdout(), msg)
 			return pErr
+		},
+	}
+
+	cmd.Flags().StringVar(
+		&socketPath,
+		"socket",
+		"",
+		"Explicit path to UNIX domain socket",
+	)
+	cmd.Flags().StringVarP(
+		&serverURL,
+		"server",
+		"s",
+		"http://127.0.0.1:8080",
+		"Target Crucible server URL",
+	)
+	cmd.Flags().StringVarP(
+		&token,
+		"token",
+		"t",
+		"",
+		"Bearer token for remote TCP authentication",
+	)
+
+	return cmd
+}
+
+func tokenReviewCmd() *cobra.Command {
+	var (
+		socketPath string
+		serverURL  string
+		token      string
+	)
+
+	cmd := &cobra.Command{
+		Use:   "review <token-id>",
+		Short: "Reconfirm a legacy review-required token",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			tokenID := strings.TrimSpace(args[0])
+			if tokenID == "" {
+				return errors.New("token ID is required")
+			}
+
+			transport, err := ResolveClientTransport(
+				cmd.Context(),
+				ClientOptions{
+					SocketPath: socketPath,
+					ServerURL:  serverURL,
+					Token:      token,
+				},
+			)
+			if err != nil {
+				return err
+			}
+
+			if !transport.IsUnixSock && transport.Token == "" {
+				return errors.New(
+					"authentication token is required " +
+						"for remote access (--token)",
+				)
+			}
+
+			payload, mErr := json.Marshal(map[string]string{
+				"id": tokenID,
+			})
+			if mErr != nil {
+				return fmt.Errorf("encoding payload: %w", mErr)
+			}
+
+			resp, err := transport.Request(
+				cmd.Context(),
+				http.MethodPost,
+				"/api/v1/tokens/review",
+				bytes.NewReader(payload),
+			)
+			if err != nil {
+				return fmt.Errorf(
+					"connecting to server: %w",
+					err,
+				)
+			}
+			defer func() {
+				if cErr := resp.Body.Close(); cErr != nil {
+					_ = cErr
+				}
+			}()
+
+			if resp.StatusCode == http.StatusNotFound {
+				return fmt.Errorf(
+					"token %s not found",
+					tokenID,
+				)
+			}
+			if resp.StatusCode == http.StatusForbidden {
+				return fmt.Errorf(
+					"forbidden: unauthorized for %s",
+					tokenID,
+				)
+			}
+			if resp.StatusCode != http.StatusOK {
+				body := readResponseBody(resp.Body)
+				return fmt.Errorf(
+					"server error (%d): %s",
+					resp.StatusCode,
+					body,
+				)
+			}
+
+			msg := ui.SuccessMsg(
+				"Token %s reviewed successfully.",
+				tokenID,
+			)
+			_, pErr := fmt.Fprintln(cmd.OutOrStdout(), msg)
+			return pErr
+		},
+	}
+
+	cmd.Flags().StringVar(
+		&socketPath,
+		"socket",
+		"",
+		"Explicit path to UNIX domain socket",
+	)
+	cmd.Flags().StringVarP(
+		&serverURL,
+		"server",
+		"s",
+		"http://127.0.0.1:8080",
+		"Target Crucible server URL",
+	)
+	cmd.Flags().StringVarP(
+		&token,
+		"token",
+		"t",
+		"",
+		"Bearer token for remote TCP authentication",
+	)
+
+	return cmd
+}
+
+func tokenAuditCmd() *cobra.Command {
+	var (
+		socketPath string
+		serverURL  string
+		token      string
+	)
+
+	cmd := &cobra.Command{
+		Use:   "audit",
+		Short: "Audit tokens requiring security review",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			transport, err := ResolveClientTransport(
+				cmd.Context(),
+				ClientOptions{
+					SocketPath: socketPath,
+					ServerURL:  serverURL,
+					Token:      token,
+				},
+			)
+			if err != nil {
+				return err
+			}
+
+			if !transport.IsUnixSock && transport.Token == "" {
+				return errors.New(
+					"authentication token is required " +
+						"for remote access (--token)",
+				)
+			}
+
+			endpoint := "/api/v1/tokens?" +
+				"all=true&review_required=true"
+			resp, err := transport.Request(
+				cmd.Context(),
+				http.MethodGet,
+				endpoint,
+				nil,
+			)
+			if err != nil {
+				return fmt.Errorf(
+					"connecting to server: %w",
+					err,
+				)
+			}
+			defer func() {
+				if cErr := resp.Body.Close(); cErr != nil {
+					_ = cErr
+				}
+			}()
+
+			if resp.StatusCode != http.StatusOK {
+				body := readResponseBody(resp.Body)
+				return fmt.Errorf(
+					"server error (%d): %s",
+					resp.StatusCode,
+					body,
+				)
+			}
+
+			var toks []tokens.APIToken
+			if dErr := json.NewDecoder(
+				resp.Body,
+			).Decode(&toks); dErr != nil {
+				return fmt.Errorf("decoding tokens: %w", dErr)
+			}
+
+			if len(toks) == 0 {
+				_, pErr := fmt.Fprintln(
+					cmd.OutOrStdout(),
+					"No personal access tokens "+
+						"require review.",
+				)
+				return pErr
+			}
+
+			return printTokenList(cmd.OutOrStdout(), toks)
 		},
 	}
 
@@ -520,7 +755,7 @@ func printTokenList(out io.Writer, toks []tokens.APIToken) error {
 
 	if _, err := fmt.Fprintf(
 		out,
-		"%-26s %-16s %-12s %-10s %-12s %-20s %-20s %-8s\n",
+		"%-26s %-16s %-12s %-10s %-12s %-20s %-20s %-16s\n",
 		"TOKEN ID",
 		"NAME",
 		"PREFIX",
@@ -532,7 +767,7 @@ func printTokenList(out io.Writer, toks []tokens.APIToken) error {
 	); err != nil {
 		return err
 	}
-	if _, err := fmt.Fprintln(out, strings.Repeat("-", 120)); err != nil {
+	if _, err := fmt.Fprintln(out, strings.Repeat("-", 128)); err != nil {
 		return err
 	}
 
@@ -553,7 +788,7 @@ func printTokenList(out io.Writer, toks []tokens.APIToken) error {
 
 		if _, err := fmt.Fprintf(
 			out,
-			"%-26s %-16s %-12s %-10s %-12s %-20s %-20s %-8s\n",
+			"%-26s %-16s %-12s %-10s %-12s %-20s %-20s %-16s\n",
 			t.ID,
 			t.Name,
 			t.TokenPrefix+"...",

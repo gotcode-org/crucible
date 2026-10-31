@@ -139,9 +139,9 @@ func TestServer_Healthz_OK(t *testing.T) {
 	if !health.Database.IntegrityOK {
 		t.Errorf("expected integrity_ok to be true")
 	}
-	if health.Database.MigrationsApplied != 5 {
+	if health.Database.MigrationsApplied != 6 {
 		t.Errorf(
-			"expected 5 migrations applied, got %d",
+			"expected 6 migrations applied, got %d",
 			health.Database.MigrationsApplied,
 		)
 	}
@@ -3480,4 +3480,409 @@ func TestAuthWeb_FirstBootSetup_APISetupAndBarrier(t *testing.T) {
 			cErr,
 		)
 	}
+}
+
+func setupTokenServer(
+	t *testing.T,
+) (*server.HTTPServer, string, *storage.SQLiteAdapter) {
+	t.Helper()
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "token_test.db")
+	sockPath := filepath.Join(tmpDir, "token_test.sock")
+
+	engine, err := storage.NewSQLiteAdapter(
+		context.Background(),
+		config.StorageConfig{
+			DatabasePath:  dbPath,
+			WALMode:       false,
+			BusyTimeoutMs: 5000,
+		},
+	)
+	if err != nil {
+		t.Fatalf("opening sqlite engine: %v", err)
+	}
+
+	if mErr := engine.Migrate(context.Background()); mErr != nil {
+		t.Fatalf("running initial migration: %v", mErr)
+	}
+
+	authStore := storage.NewSQLiteAuthStore(engine)
+	sqliteAuth := auth.NewSQLiteAuthenticator(authStore)
+	crypter := auth.NewPlaintextCrypter()
+	cmdSvc := auth.NewCommandService(
+		sqliteAuth,
+		authStore,
+		authStore,
+		authStore,
+		authStore,
+		authStore,
+		authStore,
+		crypter,
+		false,
+	)
+	querySvc := auth.NewQueryService(
+		authStore,
+		authStore,
+		authStore,
+		authStore,
+	)
+
+	adminHash, aErr := auth.HashPassword("AdminPass123!")
+	if aErr != nil {
+		t.Fatalf("hashing admin password: %v", aErr)
+	}
+	if uErr := authStore.CreateUser(context.Background(), &auth.User{
+		Username:     "admin",
+		PasswordHash: &adminHash,
+		Role:         auth.RoleAdmin,
+		IsActive:     true,
+	}); uErr != nil {
+		t.Fatalf("creating admin user: %v", uErr)
+	}
+
+	viewerHash, vHashErr := auth.HashPassword("ViewerPass123!")
+	if vHashErr != nil {
+		t.Fatalf("hashing viewer password: %v", vHashErr)
+	}
+	if uErr := authStore.CreateUser(context.Background(), &auth.User{
+		Username:     "viewer",
+		PasswordHash: &viewerHash,
+		Role:         auth.RoleViewer,
+		IsActive:     true,
+	}); uErr != nil {
+		t.Fatalf("creating viewer user: %v", uErr)
+	}
+
+	srv, err := server.NewServer(server.Config{
+		HTTPBind:   "127.0.0.1",
+		HTTPPort:   0,
+		SocketPath: sockPath,
+		DaemonMode: "standalone",
+		Version:    "v0.1.0-tokentest",
+	}, server.Dependencies{
+		Engine:       engine,
+		QueryService: storage.NewQueryService(engine),
+		AuthCommands: cmdSvc,
+		AuthQueries:  querySvc,
+		TokenService: tokens.NewTokenService(
+			storage.NewSQLiteTokenStore(engine),
+			authStore,
+		),
+	})
+	if err != nil {
+		t.Fatalf("creating server: %v", err)
+	}
+
+	if sErr := srv.Start(context.Background()); sErr != nil {
+		t.Fatalf("starting server: %v", sErr)
+	}
+
+	t.Cleanup(func() {
+		if cErr := srv.Shutdown(context.Background()); cErr != nil {
+			t.Logf("shutdown server: %v", cErr)
+		}
+		if cErr := engine.Close(); cErr != nil {
+			t.Logf("close engine: %v", cErr)
+		}
+	})
+
+	return srv, "http://" + srv.HTTPAddr(), engine
+}
+
+func assertUnreviewedTokenDenied(
+	ctx context.Context,
+	t *testing.T,
+	tcpClient *http.Client,
+	unixClient *http.Client,
+	baseURL string,
+	rawLegacy string,
+) {
+	t.Helper()
+	tcpReq, err := http.NewRequestWithContext(
+		ctx,
+		http.MethodGet,
+		baseURL+"/api/v1/auth/session",
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("creating TCP request: %v", err)
+	}
+	tcpReq.Header.Set("Authorization", "Bearer "+rawLegacy)
+	tcpResp, err := tcpClient.Do(tcpReq)
+	if err != nil {
+		t.Fatalf("TCP request failed: %v", err)
+	}
+	defer closeBody(t, tcpResp)
+	if tcpResp.StatusCode != http.StatusForbidden {
+		t.Fatalf(
+			"TCP expected 403 Forbidden, got %d",
+			tcpResp.StatusCode,
+		)
+	}
+	tcpBytes, err := io.ReadAll(tcpResp.Body)
+	if err != nil {
+		t.Fatalf("reading TCP body: %v", err)
+	}
+	if !strings.Contains(string(tcpBytes), "requires review before use") {
+		t.Fatalf("TCP unexpected body: %s", string(tcpBytes))
+	}
+
+	unixReq, err := http.NewRequestWithContext(
+		ctx,
+		http.MethodGet,
+		"http://unix/api/v1/auth/session",
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("creating Unix request: %v", err)
+	}
+	unixReq.Header.Set("Authorization", "Bearer "+rawLegacy)
+	unixResp, err := unixClient.Do(unixReq)
+	if err != nil {
+		t.Fatalf("Unix socket request failed: %v", err)
+	}
+	defer closeBody(t, unixResp)
+	if unixResp.StatusCode != http.StatusForbidden {
+		t.Fatalf(
+			"Unix socket expected 403 Forbidden, got %d",
+			unixResp.StatusCode,
+		)
+	}
+	unixBytes, err := io.ReadAll(unixResp.Body)
+	if err != nil {
+		t.Fatalf("reading Unix body: %v", err)
+	}
+	if !strings.Contains(string(unixBytes), "requires review before use") {
+		t.Fatalf("Unix socket unexpected body: %s", string(unixBytes))
+	}
+}
+
+func reviewLegacyTokenOverUnix(
+	ctx context.Context,
+	t *testing.T,
+	unixClient *http.Client,
+	legacyID string,
+) {
+	t.Helper()
+	listReq, err := http.NewRequestWithContext(
+		ctx,
+		http.MethodGet,
+		"http://unix/api/v1/tokens?all=true&review_required=true",
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("creating list request: %v", err)
+	}
+	listResp, lErr := unixClient.Do(listReq)
+	if lErr != nil {
+		t.Fatalf("listing tokens over unix socket: %v", lErr)
+	}
+	defer closeBody(t, listResp)
+	if listResp.StatusCode != http.StatusOK {
+		t.Fatalf("list status = %d, want 200", listResp.StatusCode)
+	}
+	var listedToks []tokens.APIToken
+	if dErr := json.NewDecoder(
+		listResp.Body,
+	).Decode(&listedToks); dErr != nil {
+		t.Fatalf("decoding token list: %v", dErr)
+	}
+	if len(listedToks) != 1 || listedToks[0].ID != legacyID {
+		t.Fatalf(
+			"expected legacy token in review list, got %+v",
+			listedToks,
+		)
+	}
+
+	reviewPayload := `{"id":"` + legacyID + `"}`
+	revReq, err := http.NewRequestWithContext(
+		ctx,
+		http.MethodPost,
+		"http://unix/api/v1/tokens/review",
+		strings.NewReader(reviewPayload),
+	)
+	if err != nil {
+		t.Fatalf("creating review request: %v", err)
+	}
+	revReq.Header.Set("Content-Type", "application/json")
+	revResp, rErr := unixClient.Do(revReq)
+	if rErr != nil {
+		t.Fatalf("review request failed: %v", rErr)
+	}
+	defer closeBody(t, revResp)
+	if revResp.StatusCode != http.StatusOK {
+		t.Fatalf("review status = %d, want 200", revResp.StatusCode)
+	}
+}
+
+func assertReviewedTokenPermitted(
+	ctx context.Context,
+	t *testing.T,
+	tcpClient *http.Client,
+	unixClient *http.Client,
+	baseURL string,
+	rawLegacy string,
+) {
+	t.Helper()
+	tcpReq, err := http.NewRequestWithContext(
+		ctx,
+		http.MethodGet,
+		baseURL+"/api/v1/auth/session",
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("creating TCP request: %v", err)
+	}
+	tcpReq.Header.Set("Authorization", "Bearer "+rawLegacy)
+	tcpResp, err := tcpClient.Do(tcpReq)
+	if err != nil {
+		t.Fatalf("TCP request after review failed: %v", err)
+	}
+	defer closeBody(t, tcpResp)
+	if tcpResp.StatusCode != http.StatusOK {
+		t.Fatalf(
+			"TCP expected 200 OK after review, got %d",
+			tcpResp.StatusCode,
+		)
+	}
+
+	unixReq, err := http.NewRequestWithContext(
+		ctx,
+		http.MethodGet,
+		"http://unix/api/v1/auth/session",
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("creating Unix request: %v", err)
+	}
+	unixReq.Header.Set("Authorization", "Bearer "+rawLegacy)
+	unixResp, err := unixClient.Do(unixReq)
+	if err != nil {
+		t.Fatalf("Unix request after review failed: %v", err)
+	}
+	defer closeBody(t, unixResp)
+	if unixResp.StatusCode != http.StatusOK {
+		t.Fatalf(
+			"Unix socket expected 200 OK after review, got %d",
+			unixResp.StatusCode,
+		)
+	}
+}
+
+func assertViewerWildcardCeilingEnforced(
+	ctx context.Context,
+	t *testing.T,
+	tcpClient *http.Client,
+	baseURL string,
+	tokenStore *storage.SQLiteTokenStore,
+) {
+	t.Helper()
+	rawViewer, pfxViewer, hashViewer, err := tokens.GenerateRawToken()
+	if err != nil {
+		t.Fatalf("generating raw viewer token: %v", err)
+	}
+	vTok := &tokens.APIToken{
+		ID:          "tok_viewer_wildcard",
+		Name:        "viewer-explicit-wildcard",
+		TokenPrefix: pfxViewer,
+		TokenHash:   hashViewer,
+		Username:    "viewer",
+		Role:        auth.RoleViewer,
+		Scopes:      []string{"*"},
+		CreatedAt:   time.Now().UTC(),
+	}
+	if cErr := tokenStore.CreateToken(ctx, vTok); cErr != nil {
+		t.Fatalf("creating viewer token: %v", cErr)
+	}
+
+	createReq, err := http.NewRequestWithContext(
+		ctx,
+		http.MethodPost,
+		baseURL+"/api/v1/tokens",
+		strings.NewReader(`{"name":"child","scopes":["*"]}`),
+	)
+	if err != nil {
+		t.Fatalf("creating token creation request: %v", err)
+	}
+	createReq.Header.Set("Authorization", "Bearer "+rawViewer)
+	createReq.Header.Set("Content-Type", "application/json")
+	createResp, err := tcpClient.Do(createReq)
+	if err != nil {
+		t.Fatalf("sending request with viewer token: %v", err)
+	}
+	defer closeBody(t, createResp)
+	if createResp.StatusCode != http.StatusForbidden {
+		t.Fatalf(
+			"expected 403 for viewer write, got %d",
+			createResp.StatusCode,
+		)
+	}
+}
+
+func TestAuthAPI_LegacyWildcardReviewAndTransportParity(t *testing.T) {
+	t.Parallel()
+	srv, baseURL, engine := setupTokenServer(t)
+
+	ctx := context.Background()
+	tcpClient := &http.Client{Timeout: 5 * time.Second}
+	sockPath := srv.SocketPath()
+	unixClient := &http.Client{
+		Transport: &http.Transport{
+			DialContext: func(
+				ctx context.Context,
+				_, _ string,
+			) (net.Conn, error) {
+				var d net.Dialer
+				return d.DialContext(ctx, "unix", sockPath)
+			},
+		},
+		Timeout: 5 * time.Second,
+	}
+
+	// 1. Seed an unreviewed legacy wildcard token for admin in DB.
+	rawLegacy, prefix, hash, err := tokens.GenerateRawToken()
+	if err != nil {
+		t.Fatalf("generating token: %v", err)
+	}
+	legacyID := "tok_legacy_test_01"
+	legacyTok := &tokens.APIToken{
+		ID:             legacyID,
+		Name:           "legacy-admin-wildcard",
+		TokenPrefix:    prefix,
+		TokenHash:      hash,
+		Username:       "admin",
+		Role:           auth.RoleAdmin,
+		Scopes:         []string{"*"},
+		CreatedAt:      time.Now().UTC().Add(-24 * time.Hour),
+		RequiresReview: true,
+	}
+	tokenStore := storage.NewSQLiteTokenStore(engine)
+	if cErr := tokenStore.CreateToken(ctx, legacyTok); cErr != nil {
+		t.Fatalf("inserting legacy token: %v", cErr)
+	}
+
+	assertUnreviewedTokenDenied(
+		ctx,
+		t,
+		tcpClient,
+		unixClient,
+		baseURL,
+		rawLegacy,
+	)
+	reviewLegacyTokenOverUnix(ctx, t, unixClient, legacyID)
+	assertReviewedTokenPermitted(
+		ctx,
+		t,
+		tcpClient,
+		unixClient,
+		baseURL,
+		rawLegacy,
+	)
+	assertViewerWildcardCeilingEnforced(
+		ctx,
+		t,
+		tcpClient,
+		baseURL,
+		tokenStore,
+	)
 }

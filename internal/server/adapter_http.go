@@ -27,7 +27,11 @@ import (
 )
 
 // SessionCookieName defines the standard name of the session cookie.
-const SessionCookieName = "crucible_session"
+const (
+	SessionCookieName         = "crucible_session"
+	errTokenReviewRequiredMsg = "Forbidden: Personal access token " +
+		"requires review before use"
+)
 
 // HTTPServer implements the Server interface hosting the embedded web shell,
 // metrics, and JSON health endpoints over dual TCP and UNIX domain sockets.
@@ -152,10 +156,15 @@ func (s *HTTPServer) setupRoutes() error {
 		"/settings/tokens/revoke",
 		s.handleSettingsTokensRevoke,
 	)
+	s.mux.HandleFunc(
+		"/settings/tokens/review",
+		s.handleSettingsTokensReview,
+	)
 
 	// JSON API endpoints
 	s.mux.HandleFunc("/api/v1/setup", s.handleAPISetup)
 	s.mux.HandleFunc("/api/v1/tokens", s.handleAPITokens)
+	s.mux.HandleFunc("/api/v1/tokens/review", s.handleAPITokensReview)
 	s.mux.HandleFunc("/api/v1/auth/login", s.handleAPILogin)
 	s.mux.HandleFunc("/api/v1/auth/verify-2fa", s.handleAPIVerify2FA)
 	s.mux.HandleFunc("/api/v1/auth/devices", s.handleAPIDevices)
@@ -590,6 +599,14 @@ func (s *HTTPServer) authenticateOperator(
 	}
 	sess, err := s.extractSession(r)
 	if err != nil || sess == nil {
+		if errors.Is(err, tokens.ErrTokenRequiresReview) {
+			http.Error(
+				w,
+				errTokenReviewRequiredMsg,
+				http.StatusForbidden,
+			)
+			return nil, false
+		}
 		http.Redirect(
 			w,
 			r,
@@ -780,6 +797,26 @@ func (s *HTTPServer) extractSession(r *http.Request) (*auth.Session, error) {
 	}
 
 	return nil, errors.New("missing session token")
+}
+
+func (s *HTTPServer) requireAPISession(
+	w http.ResponseWriter,
+	r *http.Request,
+) *auth.Session {
+	sess, err := s.extractSession(r)
+	if err != nil || sess == nil {
+		if errors.Is(err, tokens.ErrTokenRequiresReview) {
+			http.Error(
+				w,
+				errTokenReviewRequiredMsg,
+				http.StatusForbidden,
+			)
+			return nil
+		}
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return nil
+	}
+	return sess
 }
 
 func (s *HTTPServer) handleSetup(w http.ResponseWriter, r *http.Request) {
@@ -1776,6 +1813,14 @@ func (s *HTTPServer) requirePermission(
 ) (*auth.Session, bool) {
 	sess, err := s.extractSession(r)
 	if err != nil || sess == nil {
+		if errors.Is(err, tokens.ErrTokenRequiresReview) {
+			http.Error(
+				w,
+				errTokenReviewRequiredMsg,
+				http.StatusForbidden,
+			)
+			return nil, false
+		}
 		http.Redirect(w, r, "/login?next="+r.URL.Path, http.StatusFound)
 		return nil, false
 	}
@@ -2414,9 +2459,8 @@ func (s *HTTPServer) handleAPIVerify2FA(
 }
 
 func (s *HTTPServer) handleAPIDevices(w http.ResponseWriter, r *http.Request) {
-	sess, err := s.extractSession(r)
-	if err != nil || sess == nil {
-		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+	sess := s.requireAPISession(w, r)
+	if sess == nil {
 		return
 	}
 
@@ -2494,9 +2538,8 @@ func (s *HTTPServer) handleAPIInvite(w http.ResponseWriter, r *http.Request) {
 		)
 		return
 	}
-	sess, err := s.extractSession(r)
-	if err != nil || sess == nil {
-		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+	sess := s.requireAPISession(w, r)
+	if sess == nil {
 		return
 	}
 
@@ -2534,9 +2577,8 @@ func (s *HTTPServer) handleAPIInvite(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *HTTPServer) handleAPISession(w http.ResponseWriter, r *http.Request) {
-	sess, err := s.extractSession(r)
-	if err != nil || sess == nil {
-		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+	sess := s.requireAPISession(w, r)
+	if sess == nil {
 		return
 	}
 	if !sess.Can(auth.ActionAccountRead) {
@@ -2600,9 +2642,8 @@ func (s *HTTPServer) handleAPITokens(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	sess, err := s.extractSession(r)
-	if err != nil || sess == nil {
-		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+	sess := s.requireAPISession(w, r)
+	if sess == nil {
 		return
 	}
 
@@ -2647,6 +2688,16 @@ func (s *HTTPServer) handleAPITokensGet(
 	}
 	if toks == nil {
 		toks = []tokens.APIToken{}
+	}
+	if r.URL.Query().Get("review_required") == "true" ||
+		r.URL.Query().Get("requires_review") == "true" {
+		filtered := make([]tokens.APIToken, 0, len(toks))
+		for _, tok := range toks {
+			if tok.RequiresReview {
+				filtered = append(filtered, tok)
+			}
+		}
+		toks = filtered
 	}
 	writeJSON(w, http.StatusOK, toks)
 }
@@ -2770,6 +2821,80 @@ func (s *HTTPServer) handleAPITokensDelete(
 	w.WriteHeader(http.StatusNoContent)
 }
 
+func (s *HTTPServer) handleAPITokensReview(
+	w http.ResponseWriter,
+	r *http.Request,
+) {
+	if s.tokenSvc == nil {
+		http.Error(
+			w,
+			"Token service unconfigured",
+			http.StatusServiceUnavailable,
+		)
+		return
+	}
+
+	if r.Method != http.MethodPost {
+		http.Error(
+			w,
+			"Method Not Allowed",
+			http.StatusMethodNotAllowed,
+		)
+		return
+	}
+
+	sess := s.requireAPISession(w, r)
+	if sess == nil {
+		return
+	}
+
+	if !sess.Can(auth.ActionTokensWrite) {
+		http.Error(w, "Forbidden", http.StatusForbidden)
+		return
+	}
+
+	var req struct {
+		ID string `json:"id"`
+	}
+	if !decodeJSONRequest(w, r, &req) {
+		return
+	}
+
+	idStr := strings.TrimSpace(req.ID)
+	if idStr == "" {
+		http.Error(w, "Missing token id", http.StatusBadRequest)
+		return
+	}
+
+	cmd := tokens.ReviewTokenCommand{
+		ID:       idStr,
+		Reviewer: sess.Username,
+		IsAdmin:  sess.Role == auth.RoleAdmin,
+	}
+
+	if rErr := s.tokenSvc.ReviewToken(r.Context(), cmd); rErr != nil {
+		if errors.Is(rErr, tokens.ErrTokenNotFound) {
+			http.Error(w, "Token not found", http.StatusNotFound)
+			return
+		}
+		if errors.Is(rErr, auth.ErrForbidden) {
+			http.Error(w, "Forbidden", http.StatusForbidden)
+			return
+		}
+		if errors.Is(rErr, tokens.ErrTokenRevoked) {
+			http.Error(w, rErr.Error(), http.StatusBadRequest)
+			return
+		}
+		http.Error(w, rErr.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{
+		"status": "reviewed",
+		"id":     idStr,
+	})
+}
+
 func (s *HTTPServer) handleSettingsTokens(
 	w http.ResponseWriter,
 	r *http.Request,
@@ -2834,6 +2959,14 @@ func (s *HTTPServer) requireTokensWrite(
 ) (*auth.Session, bool) {
 	sess, err := s.extractSession(r)
 	if err != nil || sess == nil {
+		if errors.Is(err, tokens.ErrTokenRequiresReview) {
+			http.Error(
+				w,
+				errTokenReviewRequiredMsg,
+				http.StatusForbidden,
+			)
+			return nil, false
+		}
 		http.Redirect(
 			w,
 			r,
@@ -3044,6 +3177,69 @@ func (s *HTTPServer) handleSettingsTokensRevoke(
 		sess,
 		nil,
 		"Token revoked successfully",
+		"",
+	)
+}
+
+func (s *HTTPServer) handleSettingsTokensReview(
+	w http.ResponseWriter,
+	r *http.Request,
+) {
+	if r.Method != http.MethodPost {
+		http.Error(
+			w,
+			"Method Not Allowed",
+			http.StatusMethodNotAllowed,
+		)
+		return
+	}
+
+	sess, ok := s.requireTokensWrite(w, r)
+	if !ok {
+		return
+	}
+
+	tokenID := strings.TrimSpace(r.FormValue("token_id"))
+	if tokenID == "" {
+		s.renderSettingsTokensView(
+			w,
+			r,
+			sess,
+			nil,
+			"",
+			"Token ID is required for review",
+		)
+		return
+	}
+
+	if s.tokenSvc == nil {
+		s.renderSettingsTokensView(
+			w,
+			r,
+			sess,
+			nil,
+			"",
+			"Token service unconfigured",
+		)
+		return
+	}
+
+	cmd := tokens.ReviewTokenCommand{
+		ID:       tokenID,
+		Reviewer: sess.Username,
+		IsAdmin:  sess.Role == auth.RoleAdmin,
+	}
+	if rErr := s.tokenSvc.ReviewToken(r.Context(), cmd); rErr != nil {
+		s.renderSettingsTokensView(w, r, sess, nil, "", rErr.Error())
+		return
+	}
+
+	s.renderSettingsTokensView(
+		w,
+		r,
+		sess,
+		nil,
+		"Token reviewed and reconfirmed successfully",
 		"",
 	)
 }

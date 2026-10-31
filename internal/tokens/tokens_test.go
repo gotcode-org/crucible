@@ -766,3 +766,231 @@ func testTokenRestrictedRolePreserved(
 		t.Fatal("expected viewer token to permit ActionSystemRead")
 	}
 }
+
+func verifyUnreviewedTokenFailsClosed(
+	ctx context.Context,
+	t *testing.T,
+	svc *tokens.TokenService,
+	rawToken string,
+) {
+	t.Helper()
+	_, vErr := svc.ValidateToken(ctx, rawToken, "192.168.1.100")
+	if !errors.Is(vErr, tokens.ErrTokenRequiresReview) {
+		t.Fatalf("expected ErrTokenRequiresReview, got %v", vErr)
+	}
+
+	tokList, lErr := svc.ListTokens(ctx, "alice")
+	if lErr != nil {
+		t.Fatalf("listing tokens: %v", lErr)
+	}
+	if len(tokList) != 1 || !tokList[0].RequiresReview {
+		t.Fatalf("expected 1 review-required token, got %+v", tokList)
+	}
+	if tokList[0].LastUsedAt != nil {
+		t.Fatalf(
+			"expected last_used_at to remain nil " +
+				"on denied attempt",
+		)
+	}
+}
+
+func verifyTokenReviewAndUnblock(
+	ctx context.Context,
+	t *testing.T,
+	svc *tokens.TokenService,
+	tokenStore *storage.SQLiteTokenStore,
+	rawToken string,
+	tokenID string,
+) {
+	t.Helper()
+	unauthErr := svc.ReviewToken(ctx, tokens.ReviewTokenCommand{
+		ID:       tokenID,
+		Reviewer: "operator",
+		IsAdmin:  false,
+	})
+	if !errors.Is(unauthErr, auth.ErrForbidden) {
+		t.Fatalf("expected auth.ErrForbidden: %v", unauthErr)
+	}
+
+	authErr := svc.ReviewToken(ctx, tokens.ReviewTokenCommand{
+		ID:       tokenID,
+		Reviewer: "alice",
+		IsAdmin:  false,
+	})
+	if authErr != nil {
+		t.Fatalf("owner review failed: %v", authErr)
+	}
+
+	unblockedTok, gErr := tokenStore.GetTokenByID(ctx, tokenID)
+	if gErr != nil {
+		t.Fatalf("fetching unblocked token: %v", gErr)
+	}
+	if unblockedTok.RequiresReview {
+		t.Fatalf("expected RequiresReview to be false")
+	}
+	if unblockedTok.ReviewedBy == nil ||
+		*unblockedTok.ReviewedBy != "alice" {
+		t.Fatalf(
+			"expected ReviewedBy = 'alice', got %v",
+			unblockedTok.ReviewedBy,
+		)
+	}
+	if unblockedTok.ReviewedAt == nil {
+		t.Fatalf("expected ReviewedAt timestamp")
+	}
+
+	validTok, vErr2 := svc.ValidateToken(ctx, rawToken, "192.168.1.100")
+	if vErr2 != nil {
+		t.Fatalf("validating reviewed token failed: %v", vErr2)
+	}
+	if validTok.LastUsedAt == nil {
+		t.Fatalf("expected last_used_at to be populated after success")
+	}
+}
+
+func verifyAdminReviewOfOperatorToken(
+	ctx context.Context,
+	t *testing.T,
+	svc *tokens.TokenService,
+	tokenStore *storage.SQLiteTokenStore,
+) {
+	t.Helper()
+	rawOp, prefixOp, hashOp, gErr := tokens.GenerateRawToken()
+	if gErr != nil {
+		t.Fatalf("generating operator raw token: %v", gErr)
+	}
+	opTokID := "tok_legacy_op_02"
+	if cErr := tokenStore.CreateToken(ctx, &tokens.APIToken{
+		ID:             opTokID,
+		Name:           "operator-legacy-pat",
+		TokenPrefix:    prefixOp,
+		TokenHash:      hashOp,
+		Username:       "operator",
+		Role:           auth.RoleOperator,
+		Scopes:         []string{"*"},
+		CreatedAt:      time.Now().UTC().Add(-24 * time.Hour),
+		RequiresReview: true,
+	}); cErr != nil {
+		t.Fatalf("inserting operator token: %v", cErr)
+	}
+
+	adminReviewErr := svc.ReviewToken(ctx, tokens.ReviewTokenCommand{
+		ID:       opTokID,
+		Reviewer: "alice",
+		IsAdmin:  true,
+	})
+	if adminReviewErr != nil {
+		t.Fatalf(
+			"admin review of operator token failed: %v",
+			adminReviewErr,
+		)
+	}
+
+	opValidTok, vOpErr := svc.ValidateToken(ctx, rawOp, "127.0.0.1")
+	if vOpErr != nil {
+		t.Fatalf("validating reviewed operator token: %v", vOpErr)
+	}
+	if opValidTok.Role != auth.RoleOperator {
+		t.Fatalf("expected role operator, got %s", opValidTok.Role)
+	}
+}
+
+func TestTokenService_LegacyWildcardReviewAndFailClosed(t *testing.T) {
+	t.Parallel()
+	db := setupTestDB(t)
+	defer func() {
+		if cErr := db.Close(); cErr != nil {
+			t.Errorf("closing test db: %v", cErr)
+		}
+	}()
+
+	ctx := context.Background()
+	authStore := storage.NewSQLiteAuthStore(db)
+	tokenStore := storage.NewSQLiteTokenStore(db)
+	svc := tokens.NewTokenService(tokenStore, authStore)
+
+	rawToken, prefix, hash, err := tokens.GenerateRawToken()
+	if err != nil {
+		t.Fatalf("generating token: %v", err)
+	}
+	tokenID := "tok_legacy_wildcard_01"
+	legacyTok := &tokens.APIToken{
+		ID:             tokenID,
+		Name:           "legacy-wildcard-token",
+		TokenPrefix:    prefix,
+		TokenHash:      hash,
+		Username:       "alice",
+		Role:           auth.RoleAdmin,
+		Scopes:         []string{"*"},
+		CreatedAt:      time.Now().UTC().Add(-48 * time.Hour),
+		RequiresReview: true,
+	}
+	if cErr := tokenStore.CreateToken(ctx, legacyTok); cErr != nil {
+		t.Fatalf("inserting legacy token: %v", cErr)
+	}
+
+	verifyUnreviewedTokenFailsClosed(ctx, t, svc, rawToken)
+	verifyTokenReviewAndUnblock(ctx, t, svc, tokenStore, rawToken, tokenID)
+	verifyAdminReviewOfOperatorToken(ctx, t, svc, tokenStore)
+	testScopeIntegrityFailClosed(ctx, t, svc, tokenStore)
+}
+
+func testScopeIntegrityFailClosed(
+	ctx context.Context,
+	t *testing.T,
+	svc *tokens.TokenService,
+	store *storage.SQLiteTokenStore,
+) {
+	t.Helper()
+
+	// Empty scopes:
+	rawEmpty, prefixEmpty, hashEmpty, gErr := tokens.GenerateRawToken()
+	if gErr != nil {
+		t.Fatalf("generating empty-scopes raw token: %v", gErr)
+	}
+	if cErr := store.CreateToken(ctx, &tokens.APIToken{
+		ID:          "tok_empty_scopes",
+		Name:        "empty-scopes-pat",
+		TokenPrefix: prefixEmpty,
+		TokenHash:   hashEmpty,
+		Username:    "alice",
+		Role:        auth.RoleAdmin,
+		Scopes:      []string{},
+		CreatedAt:   time.Now().UTC(),
+	}); cErr != nil {
+		t.Fatalf("inserting empty-scopes token: %v", cErr)
+	}
+	_, errEmpty := svc.ValidateToken(ctx, rawEmpty, "127.0.0.1")
+	if !errors.Is(errEmpty, tokens.ErrScopesRequired) {
+		t.Fatalf(
+			"expected ErrScopesRequired for empty scopes, got %v",
+			errEmpty,
+		)
+	}
+
+	// Unknown / invalid scope:
+	rawUnknown, prefixUnknown, hashUnknown, gErr2 :=
+		tokens.GenerateRawToken()
+	if gErr2 != nil {
+		t.Fatalf("generating unknown-scope raw token: %v", gErr2)
+	}
+	if cErr := store.CreateToken(ctx, &tokens.APIToken{
+		ID:          "tok_unknown_scope",
+		Name:        "unknown-scope-pat",
+		TokenPrefix: prefixUnknown,
+		TokenHash:   hashUnknown,
+		Username:    "alice",
+		Role:        auth.RoleAdmin,
+		Scopes:      []string{"nonexistent:action"},
+		CreatedAt:   time.Now().UTC(),
+	}); cErr != nil {
+		t.Fatalf("inserting unknown-scope token: %v", cErr)
+	}
+	_, errUnknown := svc.ValidateToken(ctx, rawUnknown, "127.0.0.1")
+	if !errors.Is(errUnknown, tokens.ErrInvalidScope) {
+		t.Fatalf(
+			"expected ErrInvalidScope for unknown scope, got %v",
+			errUnknown,
+		)
+	}
+}

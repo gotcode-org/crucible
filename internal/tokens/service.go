@@ -29,7 +29,11 @@ func ValidateScopes(scopes []string) ([]string, error) {
 			continue
 		}
 		if !auth.IsValidScope(trimmed) {
-			return nil, fmt.Errorf("%w: %q", ErrInvalidScope, trimmed)
+			return nil, fmt.Errorf(
+				"%w: %q",
+				ErrInvalidScope,
+				trimmed,
+			)
 		}
 		if _, ok := seen[trimmed]; !ok {
 			seen[trimmed] = struct{}{}
@@ -133,6 +137,30 @@ func (s *TokenService) CreateToken(
 	}, nil
 }
 
+// checkTokenValidity inspects token status flags, expiration, review
+// requirements, and scope validity.
+func checkTokenValidity(tok *APIToken, now time.Time) error {
+	if tok.Revoked {
+		return ErrTokenRevoked
+	}
+	if tok.ExpiresAt != nil && !tok.ExpiresAt.IsZero() &&
+		now.After(*tok.ExpiresAt) {
+		return ErrTokenExpired
+	}
+	if tok.RequiresReview {
+		return ErrTokenRequiresReview
+	}
+	if len(tok.Scopes) == 0 {
+		return ErrScopesRequired
+	}
+	for _, sc := range tok.Scopes {
+		if !auth.IsValidScope(sc) {
+			return ErrInvalidScope
+		}
+	}
+	return nil
+}
+
 // ValidateToken checks a raw token string against the store, verifies its
 // active status and owner account, touches last-used telemetry, and binds
 // effective role permissions to the owner's current role.
@@ -155,12 +183,8 @@ func (s *TokenService) ValidateToken(
 	}
 
 	now := time.Now().UTC()
-	if tok.Revoked {
-		return nil, ErrTokenRevoked
-	}
-	if tok.ExpiresAt != nil && !tok.ExpiresAt.IsZero() &&
-		now.After(*tok.ExpiresAt) {
-		return nil, ErrTokenExpired
+	if vErr := checkTokenValidity(tok, now); vErr != nil {
+		return nil, vErr
 	}
 
 	if s.userLookup == nil {
@@ -192,6 +216,10 @@ func (s *TokenService) ValidateToken(
 	); tErr != nil {
 		return nil, tErr
 	}
+	tok.LastUsedAt = &now
+	if clientIP != "" {
+		tok.LastUsedIP = &clientIP
+	}
 
 	return tok, nil
 }
@@ -215,4 +243,37 @@ func (s *TokenService) RevokeToken(
 		return ErrTokenNotFound
 	}
 	return s.store.RevokeToken(ctx, idStr, userStr, time.Now().UTC())
+}
+
+// ReviewToken confirms a review-required token after owner/admin review.
+func (s *TokenService) ReviewToken(
+	ctx context.Context,
+	cmd ReviewTokenCommand,
+) error {
+	idStr := strings.TrimSpace(cmd.ID)
+	reviewer := strings.TrimSpace(cmd.Reviewer)
+	if idStr == "" {
+		return ErrTokenNotFound
+	}
+	if reviewer == "" {
+		return auth.ErrForbidden
+	}
+
+	tok, err := s.store.GetTokenByID(ctx, idStr)
+	if err != nil {
+		return err
+	}
+	if tok == nil {
+		return ErrTokenNotFound
+	}
+	if tok.Revoked {
+		return ErrTokenRevoked
+	}
+
+	// Only the token's owner or an administrator can review/reconfirm it.
+	if !cmd.IsAdmin && tok.Username != reviewer {
+		return auth.ErrForbidden
+	}
+
+	return s.store.ReviewToken(ctx, idStr, reviewer, time.Now().UTC())
 }

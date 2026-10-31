@@ -27,7 +27,10 @@ func NewSQLiteTokenStore(adapter *SQLiteAdapter) *SQLiteTokenStore {
 }
 
 // CreateToken persists a new token record.
-func (s *SQLiteTokenStore) CreateToken(ctx context.Context, tok *tokendomain.APIToken) error {
+func (s *SQLiteTokenStore) CreateToken(
+	ctx context.Context,
+	tok *tokendomain.APIToken,
+) error {
 	scopesJSON, err := json.Marshal(tok.Scopes)
 	if err != nil {
 		return fmt.Errorf("marshaling token scopes: %w", err)
@@ -40,11 +43,22 @@ func (s *SQLiteTokenStore) CreateToken(ctx context.Context, tok *tokendomain.API
 		expiresAtStr = &exp
 	}
 
+	requiresReviewInt := 0
+	if tok.RequiresReview {
+		requiresReviewInt = 1
+	}
+	var reviewedAtStr *string
+	if tok.ReviewedAt != nil && !tok.ReviewedAt.IsZero() {
+		rev := tok.ReviewedAt.UTC().Format(time.RFC3339)
+		reviewedAtStr = &rev
+	}
+
 	query := `
 INSERT INTO api_tokens (
 	id, name, token_prefix, token_hash, username, role, scopes_json,
-	created_at, expires_at, revoked
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`
+	created_at, expires_at, revoked, requires_review, reviewed_at,
+	reviewed_by
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)`
 
 	_, err = s.db.ExecContext(
 		ctx,
@@ -58,6 +72,9 @@ INSERT INTO api_tokens (
 		string(scopesJSON),
 		createdAtStr,
 		expiresAtStr,
+		requiresReviewInt,
+		reviewedAtStr,
+		tok.ReviewedBy,
 	)
 	if err != nil {
 		return fmt.Errorf("inserting api token %s: %w", tok.ID, err)
@@ -72,7 +89,8 @@ func (s *SQLiteTokenStore) GetTokenByHash(
 ) (*tokendomain.APIToken, error) {
 	query := `
 SELECT id, name, token_prefix, token_hash, username, role, scopes_json,
-       created_at, last_used_at, last_used_ip, expires_at, revoked, revoked_at
+       created_at, last_used_at, last_used_ip, expires_at, revoked,
+       revoked_at, requires_review, reviewed_at, reviewed_by
 FROM api_tokens
 WHERE token_hash = ?`
 
@@ -87,7 +105,8 @@ func (s *SQLiteTokenStore) GetTokenByID(
 ) (*tokendomain.APIToken, error) {
 	query := `
 SELECT id, name, token_prefix, token_hash, username, role, scopes_json,
-       created_at, last_used_at, last_used_ip, expires_at, revoked, revoked_at
+       created_at, last_used_at, last_used_ip, expires_at, revoked,
+       revoked_at, requires_review, reviewed_at, reviewed_by
 FROM api_tokens
 WHERE id = ?`
 
@@ -107,7 +126,8 @@ func (s *SQLiteTokenStore) ListUserTokens(
 	if username != "" {
 		query := `
 SELECT id, name, token_prefix, token_hash, username, role, scopes_json,
-       created_at, last_used_at, last_used_ip, expires_at, revoked, revoked_at
+       created_at, last_used_at, last_used_ip, expires_at, revoked,
+       revoked_at, requires_review, reviewed_at, reviewed_by
 FROM api_tokens
 WHERE username = ?
 ORDER BY created_at DESC`
@@ -115,7 +135,8 @@ ORDER BY created_at DESC`
 	} else {
 		query := `
 SELECT id, name, token_prefix, token_hash, username, role, scopes_json,
-       created_at, last_used_at, last_used_ip, expires_at, revoked, revoked_at
+       created_at, last_used_at, last_used_ip, expires_at, revoked,
+       revoked_at, requires_review, reviewed_at, reviewed_by
 FROM api_tokens
 ORDER BY created_at DESC`
 		rows, err = s.db.QueryContext(ctx, query)
@@ -207,11 +228,40 @@ WHERE id = ? AND revoked = 0`
 	return nil
 }
 
+// ReviewToken confirms a review-required token and records reviewer audit.
+func (s *SQLiteTokenStore) ReviewToken(
+	ctx context.Context,
+	id string,
+	reviewedBy string,
+	at time.Time,
+) error {
+	atStr := at.UTC().Format(time.RFC3339)
+	query := `
+UPDATE api_tokens
+SET requires_review = 0, reviewed_at = ?, reviewed_by = ?
+WHERE id = ? AND revoked = 0`
+
+	res, err := s.db.ExecContext(ctx, query, atStr, reviewedBy, id)
+	if err != nil {
+		return fmt.Errorf("reviewing token %s: %w", id, err)
+	}
+	rows, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("checking review rows affected: %w", err)
+	}
+	if rows == 0 {
+		return tokendomain.ErrTokenNotFound
+	}
+	return nil
+}
+
 type rowScanner interface {
 	Scan(dest ...any) error
 }
 
-func (s *SQLiteTokenStore) scanToken(r rowScanner) (*tokendomain.APIToken, error) {
+func (s *SQLiteTokenStore) scanToken(
+	r rowScanner,
+) (*tokendomain.APIToken, error) {
 	tok, err := s.scanTokenRow(r)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, tokendomain.ErrTokenNotFound
@@ -219,17 +269,22 @@ func (s *SQLiteTokenStore) scanToken(r rowScanner) (*tokendomain.APIToken, error
 	return tok, err
 }
 
-func (s *SQLiteTokenStore) scanTokenRow(r rowScanner) (*tokendomain.APIToken, error) {
+func (s *SQLiteTokenStore) scanTokenRow(
+	r rowScanner,
+) (*tokendomain.APIToken, error) {
 	var (
-		tok          tokendomain.APIToken
-		roleStr      string
-		scopesRaw    string
-		createdStr   string
-		lastUsedStr  sql.NullString
-		lastUsedIP   sql.NullString
-		expiresStr   sql.NullString
-		revokedInt   int
-		revokedAtStr sql.NullString
+		tok               tokendomain.APIToken
+		roleStr           string
+		scopesRaw         string
+		createdStr        string
+		lastUsedStr       sql.NullString
+		lastUsedIP        sql.NullString
+		expiresStr        sql.NullString
+		revokedInt        int
+		revokedAtStr      sql.NullString
+		requiresReviewInt int
+		reviewedAtStr     sql.NullString
+		reviewedByStr     sql.NullString
 	)
 
 	err := r.Scan(
@@ -246,6 +301,9 @@ func (s *SQLiteTokenStore) scanTokenRow(r rowScanner) (*tokendomain.APIToken, er
 		&expiresStr,
 		&revokedInt,
 		&revokedAtStr,
+		&requiresReviewInt,
+		&reviewedAtStr,
+		&reviewedByStr,
 	)
 	if err != nil {
 		return nil, err
@@ -253,6 +311,7 @@ func (s *SQLiteTokenStore) scanTokenRow(r rowScanner) (*tokendomain.APIToken, er
 
 	tok.Role = auth.Role(roleStr)
 	tok.Revoked = revokedInt == 1
+	tok.RequiresReview = requiresReviewInt == 1
 
 	tok.Scopes = nil
 	if scopesRaw != "" {
@@ -289,6 +348,16 @@ func (s *SQLiteTokenStore) scanTokenRow(r rowScanner) (*tokendomain.APIToken, er
 		if pErr == nil {
 			tok.RevokedAt = &t
 		}
+	}
+	if reviewedAtStr.Valid {
+		t, pErr := time.Parse(time.RFC3339, reviewedAtStr.String)
+		if pErr == nil {
+			tok.ReviewedAt = &t
+		}
+	}
+	if reviewedByStr.Valid {
+		by := reviewedByStr.String
+		tok.ReviewedBy = &by
 	}
 
 	return &tok, nil

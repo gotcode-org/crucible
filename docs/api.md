@@ -391,6 +391,7 @@ Lists active and revoked personal access tokens.
 - **Query Parameters**:
   - `username` (Admin only): Filter tokens by specific operator username.
   - `all=true` (Admin only): Return all tokens across all operators.
+  - `review_required=true`: Filter tokens requiring security review.
 - **Responses**:
   - `200 OK`:
     ```json
@@ -406,7 +407,8 @@ Lists active and revoked personal access tokens.
         "last_used_at": "2026-10-29T15:20:00Z",
         "last_used_ip": "192.168.1.50:54321",
         "expires_at": "2026-11-28T14:30:00Z",
-        "revoked": false
+        "revoked": false,
+        "requires_review": false
       }
     ]
     ```
@@ -475,6 +477,32 @@ this token are immediately rejected with `401 Unauthorized`.
 
 ---
 
+### `POST /api/v1/tokens/review`
+Reconfirms and unblocks a legacy wildcard Personal Access Token marked as
+requiring security review. Reconfirmation is restricted to the token owner
+or an administrator.
+
+- **Authentication**: Required (Bearer PAT, cookie, or UNIX socket).
+- **Request Body**:
+```json
+{
+  "id": "tok_01j78tok1..."
+}
+```
+- **Responses**:
+  - `200 OK`:
+    ```json
+    {
+      "status": "reviewed",
+      "id": "tok_01j78tok1..."
+    }
+    ```
+  - `400 Bad Request`: Missing token ID or token is revoked.
+  - `403 Forbidden`: Authenticated user is neither token owner nor admin.
+  - `404 Not Found`: Token does not exist.
+
+---
+
 ## 7. Web Console Form Actions
 
 The web console provides form-based endpoints for operator interactions:
@@ -489,6 +517,7 @@ The web console provides form-based endpoints for operator interactions:
 | `GET`  | `/settings/tokens` | Render personal tokens view | Auth |
 | `POST` | `/settings/tokens/create` | Form token generation | Auth |
 | `POST` | `/settings/tokens/revoke` | Form token revocation | Auth |
+| `POST` | `/settings/tokens/review` | Form token reconfirmation | Auth |
 | `POST` | `/settings/password` | Self-service password rotation | Auth |
 | `POST` | `/settings/2fa/enroll` | Enroll authenticator device | Auth |
 | `POST` | `/settings/2fa/revoke` | Revoke authenticator device | Auth |
