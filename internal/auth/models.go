@@ -112,6 +112,7 @@ type Session struct {
 	ID                 string         `json:"id"`
 	Username           string         `json:"username"`
 	Role               Role           `json:"role"`
+	TokenRole          Role           `json:"token_role,omitempty"`
 	MustChangePassword bool           `json:"must_change_password"`
 	CreatedAt          time.Time      `json:"created_at"`
 	ExpiresAt          time.Time      `json:"expires_at"`
@@ -132,6 +133,7 @@ func (s *Session) Principal() *Principal {
 		ID:             s.ID,
 		Username:       s.Username,
 		Role:           s.Role,
+		TokenRole:      s.TokenRole,
 		CredentialKind: kind,
 		Scopes:         s.Scopes,
 	}

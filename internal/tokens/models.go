@@ -40,6 +40,12 @@ var (
 
 	// ErrOwnerInactive indicates the token owner account is inactive.
 	ErrOwnerInactive = errors.New("token owner account is inactive or disabled")
+
+	// ErrRoleExceedsCeiling indicates requested token role exceeds owner
+	// role permissions.
+	ErrRoleExceedsCeiling = errors.New(
+		"requested token role exceeds owner role permissions",
+	)
 )
 
 // APIToken represents a persistent Personal Access Token (PAT) record in the
@@ -52,6 +58,7 @@ type APIToken struct {
 	TokenHash   string     `json:"-"`
 	Username    string     `json:"username"`
 	Role        auth.Role  `json:"role"`
+	OwnerRole   auth.Role  `json:"owner_role,omitempty"`
 	Scopes      []string   `json:"scopes"`
 	CreatedAt   time.Time  `json:"created_at"`
 	LastUsedAt  *time.Time `json:"last_used_at,omitempty"`

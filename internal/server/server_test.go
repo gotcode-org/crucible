@@ -2558,6 +2558,131 @@ func TestAuthAPI_TokenScopeEnforcement(t *testing.T) {
 		authStore,
 		createToken,
 	)
+
+	// 6. Token role restrictions are preserved
+	// (Effective = Owner ∩ PAT Role ∩ Scope)
+	testScopeConfiguredRoleRestrictions(
+		t,
+		tcpClient,
+		unixClient,
+		baseURL,
+		createToken,
+	)
+}
+
+func testScopeConfiguredRoleRestrictions(
+	t *testing.T,
+	tcpClient *http.Client,
+	unixClient *http.Client,
+	baseURL string,
+	createToken func(string, auth.Role, []string) string,
+) {
+	t.Helper()
+	ctx := context.Background()
+
+	// 1. Admin creates a Viewer-restricted PAT with wildcard scope
+	viewerTok := createToken("admin", auth.RoleViewer, []string{"*"})
+
+	// Viewer cannot read users: GET /settings/users is 403 (TCP & Unix)
+	for _, client := range []*http.Client{tcpClient, unixClient} {
+		url := baseURL + "/settings/users"
+		if client == unixClient {
+			url = "http://unix/settings/users"
+		}
+		req, cErr := http.NewRequestWithContext(
+			ctx,
+			http.MethodGet,
+			url,
+			nil,
+		)
+		if cErr != nil {
+			t.Fatalf("creating viewer req: %v", cErr)
+		}
+		req.Header.Set("Authorization", "Bearer "+viewerTok)
+		resp, dErr := client.Do(req)
+		if dErr != nil {
+			t.Fatalf("doing viewer req: %v", dErr)
+		}
+		closeBody(t, resp)
+		if resp.StatusCode != http.StatusForbidden {
+			t.Fatalf(
+				"viewer on /settings/users: got %d, want 403",
+				resp.StatusCode,
+			)
+		}
+	}
+
+	// Viewer cannot manage tokens: GET /api/v1/tokens is 403 Forbidden
+	req, cErr := http.NewRequestWithContext(
+		ctx,
+		http.MethodGet,
+		baseURL+"/api/v1/tokens",
+		nil,
+	)
+	if cErr != nil {
+		t.Fatalf("creating viewer tokens req: %v", cErr)
+	}
+	req.Header.Set("Authorization", "Bearer "+viewerTok)
+	resp, dErr := tcpClient.Do(req)
+	if dErr != nil {
+		t.Fatalf("doing viewer tokens req: %v", dErr)
+	}
+	closeBody(t, resp)
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf(
+			"viewer on /api/v1/tokens: got %d, want 403",
+			resp.StatusCode,
+		)
+	}
+
+	// 2. Admin creates an Operator-restricted PAT with wildcard scope
+	opTok := createToken("admin", auth.RoleOperator, []string{"*"})
+
+	// Operator CAN read tokens: GET /api/v1/tokens is 200 OK
+	oReq, cErr := http.NewRequestWithContext(
+		ctx,
+		http.MethodGet,
+		baseURL+"/api/v1/tokens",
+		nil,
+	)
+	if cErr != nil {
+		t.Fatalf("creating op tokens req: %v", cErr)
+	}
+	oReq.Header.Set("Authorization", "Bearer "+opTok)
+	oResp, dErr := tcpClient.Do(oReq)
+	if dErr != nil {
+		t.Fatalf("doing op tokens req: %v", dErr)
+	}
+	closeBody(t, oResp)
+	if oResp.StatusCode != http.StatusOK {
+		t.Fatalf(
+			"operator on /api/v1/tokens: got %d, want 200",
+			oResp.StatusCode,
+		)
+	}
+
+	// Operator CANNOT view users: GET /settings/users is 403 Forbidden
+	uReq, cErr := http.NewRequestWithContext(
+		ctx,
+		http.MethodGet,
+		baseURL+"/settings/users",
+		nil,
+	)
+	if cErr != nil {
+		t.Fatalf("creating op users req: %v", cErr)
+	}
+	uReq.Header.Set("Authorization", "Bearer "+opTok)
+	uResp, dErr := tcpClient.Do(uReq)
+	if dErr != nil {
+		t.Fatalf("doing op users req: %v", dErr)
+	}
+	closeBody(t, uResp)
+	if uResp.StatusCode != http.StatusForbidden {
+		t.Fatalf(
+			"operator on /settings/users: got %d, want 403",
+			uResp.StatusCode,
+		)
+	}
 }
 
 func testScopeUnixAdminAccess(t *testing.T, client *http.Client) {

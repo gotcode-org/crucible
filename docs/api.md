@@ -37,12 +37,14 @@ Crucible implements a centralized authorization policy enforcing transport
 parity across all requests:
 
 - **Formula**:
-  `Effective Permissions = User Role Permissions ∩ PAT Scope Permissions`
-- **Dynamic Role Ceiling**: An owner's current role defines the absolute
-  maximum permissions available. A PAT's scopes can only narrow those
-  permissions; they can never add permissions beyond the owner's role. Role
-  changes to an owner take effect immediately across all of their PATs without
-  requiring token recreation.
+  `Effective Permissions = Owner Role Perms ∩ PAT Role Perms ∩ PAT Scopes`
+- **Dynamic Role Ceiling & Configured Role Preservation**: An owner's current
+  effective role defines the absolute ceiling for a PAT. A PAT's configured
+  role is an additional restriction that is preserved during validation and
+  never overwritten. The effective permissions are the intersection of owner
+  permissions, token role permissions, and token scopes. Owner promotions
+  elevate the ceiling but never widen a token beyond its configured role;
+  owner demotions restrict tokens immediately upon next evaluation.
 - **Account Lifecycle Enforcement**: A token owner must exist and be active.
   Disabled, deactivated, or deleted owner accounts cause PAT authentication to
   fail immediately (`401 Unauthorized`), even if the token itself is unexpired.
@@ -50,9 +52,18 @@ parity across all requests:
   all entry points (CLI, Web UI, and API). Omitted or empty scopes fail closed
   (`400 Bad Request`). Wildcard access is granted only when `*` is explicitly
   requested.
-- **Legacy Token Compatibility**: Existing persisted tokens with empty or null
-  scopes fail closed (`403 Forbidden`). Operators should audit existing tokens
-  and reissue them with explicit scopes.
+- **Legacy Token Compatibility & Operator Audit**: Existing persisted tokens
+  with empty, null, or malformed scopes fail closed (`403 Forbidden`).
+  Historical tokens with wildcard `["*"]` are bounded by the intersection of
+  the owner's current role and the token's configured role. Operators can
+  safely inspect unrevoked wildcard tokens without exposing secrets:
+  ```sql
+  SELECT id, name, username, role, scopes_json, created_at, last_used_at
+  FROM api_tokens
+  WHERE revoked = 0
+    AND (scopes_json = '["*"]' OR json_extract(scopes_json, '$[0]') = '*')
+  ORDER BY created_at DESC;
+  ```
 - **Transports**:
   - **Local UNIX Domain Socket (`/run/crucibled/crucible.sock`)**:
     Authenticated as the trusted local operator principal (`auth.RoleAdmin`,
@@ -61,8 +72,9 @@ parity across all requests:
   - **Browser Sessions**: Interactive cookie or bearer sessions inherit full
     role permissions (`CredentialSession`).
   - **Remote TCP PAT**: Requests carrying `Authorization: Bearer <token>`
-    (`CredentialToken`) are evaluated against the intersection of the owner's
-    current role permissions and the token's granted scopes.
+    (`CredentialToken`) are evaluated against the three-way intersection of
+    owner role permissions, token configured role permissions, and granted
+    scopes.
 - **Scope Vocabulary**:
   - `*`: Full wildcard (all permissions permitted by the user's role).
   - `<resource>:*`: Resource prefix wildcard (e.g. `tokens:*`).

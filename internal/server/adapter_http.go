@@ -728,7 +728,8 @@ func (s *HTTPServer) extractSession(r *http.Request) (*auth.Session, error) {
 				return &auth.Session{
 					ID:             tok.ID,
 					Username:       tok.Username,
-					Role:           tok.Role,
+					Role:           tok.OwnerRole,
+					TokenRole:      tok.Role,
 					Scopes:         tok.Scopes,
 					CredentialKind: auth.CredentialToken,
 				}, nil

@@ -82,6 +82,33 @@ func IsValidScope(scope string) bool {
 	}
 }
 
+// AllActions enumerates every discrete action defined in the system.
+var AllActions = []Action{
+	ActionTokensRead,
+	ActionTokensWrite,
+	ActionUsersRead,
+	ActionUsersWrite,
+	ActionAccountRead,
+	ActionAccountWrite,
+	ActionSystemRead,
+	ActionSystemAdmin,
+}
+
+// RolePermitsRole reports whether the granter role contains all permissions
+// of the grantee role without assuming a linear role hierarchy.
+func RolePermitsRole(granter, grantee Role) bool {
+	if !granter.IsValid() || !grantee.IsValid() {
+		return false
+	}
+	for _, action := range AllActions {
+		if RoleHasPermission(grantee, action) &&
+			!RoleHasPermission(granter, action) {
+			return false
+		}
+	}
+	return true
+}
+
 // RoleRank returns the relative privilege tier of a role for ceiling
 // comparisons (Admin > Maintainer/Operator > Viewer).
 func RoleRank(r Role) int {
@@ -103,6 +130,7 @@ type Principal struct {
 	ID             string
 	Username       string
 	Role           Role
+	TokenRole      Role
 	CredentialKind CredentialKind
 	Scopes         []string
 }
@@ -174,13 +202,13 @@ func TokenHasScope(scopes []string, action Action) bool {
 }
 
 // Authorize applies the centralized authorization policy.
-// Effective Permissions = Role Permissions ∩ PAT Scope Permissions.
+// Effective Permissions = Owner Role Perms ∩ PAT Role Perms ∩ Scopes.
 func Authorize(p *Principal, action Action) error {
 	if p == nil {
 		return ErrUnauthorized
 	}
 
-	// 1. User's role defines the maximum permissions.
+	// 1. Owner's role defines the maximum permissions.
 	if !RoleHasPermission(p.Role, action) {
 		return ErrForbidden
 	}
@@ -192,12 +220,17 @@ func Authorize(p *Principal, action Action) error {
 		return nil
 	}
 
-	// 3. Tokens must also have an approved scope covering the action.
+	// 3. Tokens must also satisfy the PAT's configured role restriction
+	// and explicit scope bounds.
 	if p.CredentialKind == CredentialToken {
-		if TokenHasScope(p.Scopes, action) {
-			return nil
+		if !p.TokenRole.IsValid() ||
+			!RoleHasPermission(p.TokenRole, action) {
+			return ErrForbidden
 		}
-		return ErrForbidden
+		if !TokenHasScope(p.Scopes, action) {
+			return ErrForbidden
+		}
+		return nil
 	}
 
 	return ErrForbidden

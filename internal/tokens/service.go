@@ -88,9 +88,13 @@ func (s *TokenService) CreateToken(
 	}
 
 	// Owner role ceiling: token role cannot elevate above the owner's
-	// current effective role.
+	// current effective role. If an explicit sub-role is requested,
+	// ensure it is within the owner's permitted action set.
+	if cmd.Role != "" && !cmd.Role.IsValid() {
+		return nil, ErrInvalidToken
+	}
 	role := user.EffectiveRole()
-	if cmd.Role.IsValid() && auth.RoleRank(cmd.Role) < auth.RoleRank(role) {
+	if cmd.Role.IsValid() && auth.RolePermitsRole(role, cmd.Role) {
 		role = cmd.Role
 	}
 
@@ -175,8 +179,9 @@ func (s *TokenService) ValidateToken(
 
 	// Dynamic owner role derivation: token permissions can never exceed
 	// the owner's current effective role, and owner promotions/demotions
-	// take effect immediately.
-	tok.Role = user.EffectiveRole()
+	// take effect immediately. Preserve the configured token role as its
+	// restriction while attaching the owner's current effective role.
+	tok.OwnerRole = user.EffectiveRole()
 
 	// Update telemetry
 	if tErr := s.store.TouchToken(

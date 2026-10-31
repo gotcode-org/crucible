@@ -563,8 +563,11 @@ func TestTokenService_OwnerRoleCeilingAndDynamicUpdates(t *testing.T) {
 	// 2. Owner demotion immediately reduces effective role permissions
 	testTokenOwnerDemotion(ctx, t, svc, authStore)
 
-	// 3. Owner promotion reflects higher role immediately
+	// 3. Owner promotion does not widen token beyond configured role
 	testTokenOwnerPromotion(ctx, t, svc, authStore, rawOpTok)
+
+	// 4. Admin creates viewer-restricted token; retains viewer bounds
+	testTokenRestrictedRolePreserved(ctx, t, svc)
 }
 
 func testTokenCannotElevateOperator(
@@ -622,6 +625,12 @@ func testTokenOwnerDemotion(
 	if aliceTok.Role != auth.RoleAdmin {
 		t.Fatalf("expected role admin, got %s", aliceTok.Role)
 	}
+	if aliceTok.OwnerRole != auth.RoleAdmin {
+		t.Fatalf(
+			"expected owner role admin, got %s",
+			aliceTok.OwnerRole,
+		)
+	}
 
 	aliceUser, gErr := authStore.GetUser(ctx, "alice")
 	if gErr != nil {
@@ -636,8 +645,31 @@ func testTokenOwnerDemotion(
 	if dErr != nil {
 		t.Fatalf("validating demoted alice token: %v", dErr)
 	}
-	if demotedTok.Role != auth.RoleViewer {
-		t.Fatalf("expected role viewer after demote, got %s", demotedTok.Role)
+	if demotedTok.Role != auth.RoleAdmin {
+		t.Fatalf(
+			"expected token role preserved as admin, got %s",
+			demotedTok.Role,
+		)
+	}
+	if demotedTok.OwnerRole != auth.RoleViewer {
+		t.Fatalf(
+			"expected owner role updated to viewer, got %s",
+			demotedTok.OwnerRole,
+		)
+	}
+
+	p := &auth.Principal{
+		Username:       demotedTok.Username,
+		Role:           demotedTok.OwnerRole,
+		TokenRole:      demotedTok.Role,
+		CredentialKind: auth.CredentialToken,
+		Scopes:         demotedTok.Scopes,
+	}
+	if p.Can(auth.ActionTokensWrite) {
+		t.Fatal("demoted owner token permitted ActionTokensWrite")
+	}
+	if !p.Can(auth.ActionSystemRead) {
+		t.Fatal("demoted owner token denied ActionSystemRead")
 	}
 }
 
@@ -662,10 +694,75 @@ func testTokenOwnerPromotion(
 	if pErr != nil {
 		t.Fatalf("validating promoted operator token: %v", pErr)
 	}
-	if promotedTok.Role != auth.RoleAdmin {
+	if promotedTok.Role != auth.RoleOperator {
 		t.Fatalf(
-			"expected role admin after promote, got %s",
+			"expected token role retained as operator, got %s",
 			promotedTok.Role,
 		)
+	}
+	if promotedTok.OwnerRole != auth.RoleAdmin {
+		t.Fatalf(
+			"expected owner role elevated to admin, got %s",
+			promotedTok.OwnerRole,
+		)
+	}
+
+	p := &auth.Principal{
+		Username:       promotedTok.Username,
+		Role:           promotedTok.OwnerRole,
+		TokenRole:      promotedTok.Role,
+		CredentialKind: auth.CredentialToken,
+		Scopes:         promotedTok.Scopes,
+	}
+	if p.Can(auth.ActionUsersWrite) {
+		t.Fatal("promoted owner token permitted ActionUsersWrite")
+	}
+	if !p.Can(auth.ActionTokensWrite) {
+		t.Fatal("promoted owner token denied ActionTokensWrite")
+	}
+}
+
+func testTokenRestrictedRolePreserved(
+	ctx context.Context,
+	t *testing.T,
+	svc *tokens.TokenService,
+) {
+	t.Helper()
+	res, err := svc.CreateToken(ctx, tokens.CreateTokenCommand{
+		Username: "alice",
+		Name:     "viewer-restricted-pat",
+		Role:     auth.RoleViewer,
+		Scopes:   []string{"*"},
+	})
+	if err != nil {
+		t.Fatalf("creating viewer-restricted token: %v", err)
+	}
+	if res.Token.Role != auth.RoleViewer {
+		t.Fatalf("expected role viewer, got %s", res.Token.Role)
+	}
+
+	tok, vErr := svc.ValidateToken(ctx, res.RawToken, "127.0.0.1")
+	if vErr != nil {
+		t.Fatalf("validating viewer-restricted token: %v", vErr)
+	}
+	if tok.Role != auth.RoleViewer {
+		t.Fatalf("expected preserved role viewer, got %s", tok.Role)
+	}
+
+	p := &auth.Principal{
+		Username:       tok.Username,
+		Role:           tok.OwnerRole,
+		TokenRole:      tok.Role,
+		CredentialKind: auth.CredentialToken,
+		Scopes:         tok.Scopes,
+	}
+	if p.Can(auth.ActionTokensWrite) {
+		t.Fatal("expected viewer token to be denied ActionTokensWrite")
+	}
+	if p.Can(auth.ActionUsersWrite) {
+		t.Fatal("expected viewer token to be denied ActionUsersWrite")
+	}
+	if !p.Can(auth.ActionSystemRead) {
+		t.Fatal("expected viewer token to permit ActionSystemRead")
 	}
 }

@@ -1,20 +1,21 @@
 # Crucible — AI Development Handoff
 
 > **Purpose:** Verified local state and concise guidance for the next
-> development session.
-> **Last updated:** 2026-10-30
-> **Repository:** `/home/jovens/code/forks/crucible`
-> **Branch:** `development`
-> **Base commit:** `ee59cad` (merged mainline `upstream/main`)
+> development session.  
+> **Last updated:** 2026-10-30  
+> **Repository:** `/home/jovens/code/forks/crucible`  
+> **Branch:** `development`  
+> **Base commit:** `d3aad993077523a9967445ecd73c5aa962b41703`  
+> (`upstream/main`)  
 > **Working tree:** Uncommitted security hardening changes (addressing
 > `FOLLOWUP.md`).
 
 ## Current checkout
 
-- `origin/main` and `upstream/main` are at `ee59cad` following the signed
-  squash merge of `pr/pat-scope-enforcement-for-v0.1.0`.
+- `origin/main` and `upstream/main` are at `d3aad99` following the signed
+  squash merge of `pr/pat-authorization-hardening-for-v0.1.0`.
 - The active branch is `development`, tracking `upstream/main`.
-- All security hardening items from `FOLLOWUP.md` have been implemented and
+- Security follow-up items from `FOLLOWUP.md` have been implemented and
   verified locally in the working tree without committing, tagging, or pushing.
 
 ## Project direction to preserve
@@ -30,62 +31,64 @@
 - Local Unix-socket administration is an intentional trust boundary for
   authorized local/SSH administrators; remote clients authenticate normally.
 
-## Hardened PAT authorization changes
+## Hardened PAT authorization changes (FOLLOWUP.md resolution)
 
 Following peer model review in `FOLLOWUP.md`, the following authorization
 boundaries have been hardened:
 
-1. **Owner Role Ceiling & Dynamic Updates**:
-   - `TokenService.ValidateToken()` retrieves the owner via `UserLookup` and
-     derives the token's effective role directly from `user.EffectiveRole()`.
-   - Token metadata can never outrank or exceed the owner's current role.
-   - Owner promotions and demotions take effect dynamically across all of
-     their active PATs without token reissuance.
-   - Admin-created tokens for other users are strictly capped to the target
-     user's effective role.
+1. **PAT Configured Role Restriction Preservation**:
+   - `TokenService.ValidateToken()` no longer overwrites `tok.Role`. It
+     retains the stored configured role and populates `tok.OwnerRole` with
+     `user.EffectiveRole()`.
+   - `auth.Session` and `auth.Principal` now track both `Role` (owner ceiling)
+     and `TokenRole` (configured PAT restriction).
+   - In `auth.Authorize()`, permissions are derived via true action-set
+     intersection across all transports:
+     `Effective = Owner Role Perms ∩ PAT Configured Role Perms ∩ PAT Scopes`.
+   - Replaced linear `auth.RoleRank` comparisons with action-set subset helper
+     `auth.RolePermitsRole(granter, grantee Role) bool`.
 
-2. **Owner Lifecycle Enforcement**:
-   - Inactive (`!user.IsActive`) or deleted owner accounts are rejected at
-     token validation with `ErrOwnerInactive` / `ErrUserNotFound` (HTTP 401
-     Unauthorized).
-   - Inactive users cannot create new tokens (`ErrOwnerInactive`).
+2. **Ceiling and Boundary Dynamics**:
+   - An administrator creating a viewer-restricted PAT retains viewer bounds;
+     it is never elevated to admin upon validation.
+   - Owner demotions immediately restrict active PATs dynamically.
+   - Owner promotions elevate the ceiling but never widen an existing PAT
+     beyond its configured role or explicit scopes.
+   - Invalid or empty configured token roles fail closed (`ErrForbidden`).
 
-3. **Mandatory Explicit Scopes (Removal of Wildcard Defaults)**:
-   - `TokenService.CreateToken()` validates requested scopes via
-     `ValidateScopes()`. Omitted or empty scopes return `ErrScopesRequired`.
-   - Unrecognized scope strings fail closed with `ErrInvalidScope`.
-   - `cruciblectl token create` requires `--scopes` (flag default changed
-     from `*` to `nil`).
-   - Web UI modal requires explicit scope input and removes default `*` value.
-   - API endpoint `POST /api/v1/tokens` returns `400 Bad Request` if `scopes`
-     is omitted or empty.
-   - Wildcard access is granted only when `*` is explicitly requested.
-
-4. **Legacy Token Compatibility Strategy**:
-   - Tokens with empty, null, or corrupted `scopes_json` in SQLite fail closed
-     (`tok.Scopes = nil`), granting zero permissions (`403 Forbidden`).
-   - `api_tokens` table schema default in `001_initial.sql` updated to `'[]'`.
-   - Operators can audit affected tokens before deployment using:
+3. **Legacy Wildcard PAT Inventory & Non-Destructive Strategy**:
+   - Investigated git archaeology (`0b367d4`, `adfa253`, `ee59cad`, `d3aad99`).
+   - SQLite table `api_tokens` stores no creation version or explicit flag,
+     and `internal/audit` is not yet implemented (Milestone 1-09).
+   - Database records cannot distinguish whether `["*"]` was typed explicitly
+     or assigned by historical CLI/Web defaults.
+   - As directed in `FOLLOWUP.md`, no automatic destructive migration was run.
+   - Under the three-way intersection model, legacy wildcard PATs are bounded
+     by `Owner Role ∩ Configured Role`, preventing privilege escalation.
+   - Documented safe operator audit query without secret/hash exposure:
      ```sql
-     SELECT id, name, username, role, scopes_json, created_at
+     SELECT id, name, username, role, scopes_json, created_at, last_used_at
      FROM api_tokens
-     WHERE scopes_json IS NULL
-        OR scopes_json = ''
-        OR scopes_json = '[]'
-        OR username NOT IN (SELECT username FROM users WHERE is_active = 1);
+     WHERE revoked = 0
+       AND (scopes_json = '["*"]' OR json_extract(scopes_json, '$[0]') = '*')
+     ORDER BY created_at DESC;
      ```
 
-## Remaining Phase 1 work
-
-- Decouple SQLite adapter options from application config at composition root.
-- Close the Phase 1 architecture stabilization gate after owner confirmation.
-- Author audit ledger specification and milestone.
+4. **Regression Tests**:
+   - Added table-driven tests in `internal/auth/principal_test.go`
+     verifying role intersections, demotion/promotion ceilings, and invalid
+     role handling.
+   - Added unit tests in `internal/tokens/tokens_test.go` verifying configured
+     role preservation, owner demotion, owner promotion, and sub-role capping.
+   - Added HTTP integration tests in `internal/server/server_test.go` verifying
+     that viewer-restricted and operator-restricted tokens enforce expected
+     allow/deny outcomes across both TCP HTTP and UNIX domain sockets.
 
 ## Verification status
 
 - `go test -race ./...` — passed across all packages.
-- `golangci-lint run ./...` — clean.
-- `make check` — verified tidy, lint, gosec, govulncheck, and test.
+- `golangci-lint run ./...` — clean (zero issues).
+- `make check` (`tidy`, `lint`, `sec`, `vuln`, `test`) — fully verified.
 - Line length validation: strictly <= 79 columns across all modified files.
 - ZERO autonomous git commits, tags, or pushes performed.
 
@@ -103,5 +106,6 @@ boundaries have been hardened:
 
 ## Next steps
 
-1. Request user review and verification by the peer model.
-2. Present exact proposed commit message and wait for explicit confirmation.
+1. Present exact diff, verification results, and proposed commit message to
+   the user for review and confirmation.
+2. Await explicit approval before committing or pushing.

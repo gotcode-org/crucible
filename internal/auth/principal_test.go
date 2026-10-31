@@ -81,6 +81,7 @@ func TestAuthorize_TableDriven(t *testing.T) {
 			principal: &auth.Principal{
 				Username:       "admin",
 				Role:           auth.RoleAdmin,
+				TokenRole:      auth.RoleAdmin,
 				CredentialKind: auth.CredentialToken,
 				Scopes:         []string{"*"},
 			},
@@ -92,6 +93,7 @@ func TestAuthorize_TableDriven(t *testing.T) {
 			principal: &auth.Principal{
 				Username:       "admin",
 				Role:           auth.RoleAdmin,
+				TokenRole:      auth.RoleAdmin,
 				CredentialKind: auth.CredentialToken,
 				Scopes:         []string{"tokens:read", "tokens:write"},
 			},
@@ -103,6 +105,7 @@ func TestAuthorize_TableDriven(t *testing.T) {
 			principal: &auth.Principal{
 				Username:       "admin",
 				Role:           auth.RoleAdmin,
+				TokenRole:      auth.RoleAdmin,
 				CredentialKind: auth.CredentialToken,
 				Scopes:         []string{"tokens:*"},
 			},
@@ -114,6 +117,7 @@ func TestAuthorize_TableDriven(t *testing.T) {
 			principal: &auth.Principal{
 				Username:       "admin",
 				Role:           auth.RoleAdmin,
+				TokenRole:      auth.RoleAdmin,
 				CredentialKind: auth.CredentialToken,
 				Scopes:         []string{"tokens:read"},
 			},
@@ -125,6 +129,7 @@ func TestAuthorize_TableDriven(t *testing.T) {
 			principal: &auth.Principal{
 				Username:       "admin",
 				Role:           auth.RoleAdmin,
+				TokenRole:      auth.RoleAdmin,
 				CredentialKind: auth.CredentialToken,
 				Scopes:         []string{"tokens:read"},
 			},
@@ -136,6 +141,7 @@ func TestAuthorize_TableDriven(t *testing.T) {
 			principal: &auth.Principal{
 				Username:       "op",
 				Role:           auth.RoleOperator,
+				TokenRole:      auth.RoleOperator,
 				CredentialKind: auth.CredentialToken,
 				Scopes:         []string{"*"},
 			},
@@ -147,6 +153,7 @@ func TestAuthorize_TableDriven(t *testing.T) {
 			principal: &auth.Principal{
 				Username:       "op",
 				Role:           auth.RoleOperator,
+				TokenRole:      auth.RoleOperator,
 				CredentialKind: auth.CredentialToken,
 				Scopes:         []string{"users:write"},
 			},
@@ -154,10 +161,119 @@ func TestAuthorize_TableDriven(t *testing.T) {
 			wantErr: auth.ErrForbidden,
 		},
 		{
+			name: "admin owner viewer token denied op action",
+			principal: &auth.Principal{
+				Username:       "admin",
+				Role:           auth.RoleAdmin,
+				TokenRole:      auth.RoleViewer,
+				CredentialKind: auth.CredentialToken,
+				Scopes:         []string{"*"},
+			},
+			action:  auth.ActionTokensWrite,
+			wantErr: auth.ErrForbidden,
+		},
+		{
+			name: "admin owner viewer token denied admin action",
+			principal: &auth.Principal{
+				Username:       "admin",
+				Role:           auth.RoleAdmin,
+				TokenRole:      auth.RoleViewer,
+				CredentialKind: auth.CredentialToken,
+				Scopes:         []string{"*"},
+			},
+			action:  auth.ActionUsersWrite,
+			wantErr: auth.ErrForbidden,
+		},
+		{
+			name: "admin owner viewer token permits viewer action",
+			principal: &auth.Principal{
+				Username:       "admin",
+				Role:           auth.RoleAdmin,
+				TokenRole:      auth.RoleViewer,
+				CredentialKind: auth.CredentialToken,
+				Scopes:         []string{"*"},
+			},
+			action:  auth.ActionSystemRead,
+			wantErr: nil,
+		},
+		{
+			name: "demoted owner admin token denied admin action",
+			principal: &auth.Principal{
+				Username:       "alice",
+				Role:           auth.RoleViewer,
+				TokenRole:      auth.RoleAdmin,
+				CredentialKind: auth.CredentialToken,
+				Scopes:         []string{"*"},
+			},
+			action:  auth.ActionUsersWrite,
+			wantErr: auth.ErrForbidden,
+		},
+		{
+			name: "promoted owner op token denied admin action",
+			principal: &auth.Principal{
+				Username:       "bob",
+				Role:           auth.RoleAdmin,
+				TokenRole:      auth.RoleOperator,
+				CredentialKind: auth.CredentialToken,
+				Scopes:         []string{"*"},
+			},
+			action:  auth.ActionUsersWrite,
+			wantErr: auth.ErrForbidden,
+		},
+		{
+			name: "promoted owner op token permits op action",
+			principal: &auth.Principal{
+				Username:       "bob",
+				Role:           auth.RoleAdmin,
+				TokenRole:      auth.RoleOperator,
+				CredentialKind: auth.CredentialToken,
+				Scopes:         []string{"*"},
+			},
+			action:  auth.ActionTokensWrite,
+			wantErr: nil,
+		},
+		{
+			name: "operator token with scope intersection",
+			principal: &auth.Principal{
+				Username:       "op",
+				Role:           auth.RoleOperator,
+				TokenRole:      auth.RoleOperator,
+				CredentialKind: auth.CredentialToken,
+				Scopes:         []string{"tokens:read"},
+			},
+			action:  auth.ActionTokensWrite,
+			wantErr: auth.ErrForbidden,
+		},
+		{
+			name: "invalid configured token role fails closed",
+			principal: &auth.Principal{
+				Username:       "admin",
+				Role:           auth.RoleAdmin,
+				TokenRole:      auth.Role("invalid"),
+				CredentialKind: auth.CredentialToken,
+				Scopes:         []string{"*"},
+			},
+			action:  auth.ActionAccountRead,
+			wantErr: auth.ErrForbidden,
+		},
+		{
+			name: "token with empty configured role fails closed",
+			principal: &auth.Principal{
+				Username:       "admin",
+				Role:           auth.RoleAdmin,
+				TokenRole:      "",
+				CredentialKind: auth.CredentialToken,
+				Scopes:         []string{"*"},
+			},
+			action:  auth.ActionAccountRead,
+			wantErr: auth.ErrForbidden,
+		},
+		{
 			name: "token with empty scopes is denied all actions",
 			principal: &auth.Principal{
 				Username:       "admin",
 				Role:           auth.RoleAdmin,
+				TokenRole:      auth.RoleAdmin,
 				CredentialKind: auth.CredentialToken,
 				Scopes:         []string{},
 			},
@@ -169,6 +285,7 @@ func TestAuthorize_TableDriven(t *testing.T) {
 			principal: &auth.Principal{
 				Username:       "admin",
 				Role:           auth.RoleAdmin,
+				TokenRole:      auth.RoleAdmin,
 				CredentialKind: auth.CredentialToken,
 				Scopes:         []string{"unknown:scope"},
 			},

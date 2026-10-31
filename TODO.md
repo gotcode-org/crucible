@@ -208,10 +208,11 @@ Format: `[state] (Priority) [domain/binary] Task description @assignee +tag`
       dynamic owner role ceiling, and inactive owner rejection
       @jovens@gotcode.org +phase1 +docs +api
 - [x] (A) [auth] Harden PAT authorization boundaries: enforce owner current
-      role ceiling dynamically, reject inactive/deleted owner accounts, mandate
-      explicit scopes on creation across CLI/Web/API, and fail closed on empty
-      or unmapped legacy token scopes @jovens@gotcode.org +phase1 +auth
-      +security
+      role ceiling dynamically, preserve token configured role restrictions,
+      enforce three-way permission set intersection (Owner Role ∩ Token Role
+      ∩ Scopes), reject inactive/deleted owner accounts, mandate explicit
+      scopes on creation across CLI/Web/API, and fail closed on legacy scopes
+      @jovens@gotcode.org +phase1 +auth +security
 - [ ] (A) [shared] Close the architecture stabilization gate: record each
       finding's disposition, complete tests and required checks, and do not
       start further feature milestones until confirmed Phase 1 fixes pass
